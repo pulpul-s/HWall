@@ -1,0 +1,10 @@
+.cargo
+.github
+Cargo.lock
+/target/
+*.swp
+*.swo
+*~
+.DS_Store
+__pycache__/
+*.py[cod]
