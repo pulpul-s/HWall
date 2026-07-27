@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "crates/hwall-core",
+    "crates/hwall-cli",
+    "crates/hwall-app",
+    "crates/hwall-gui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.92"
+authors = ["HWall contributors"]
+
+[workspace.dependencies]
+clap = { version = "=4.6.4", features = ["derive"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+directories = "=6.0.0"

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.hwall.HWall</id>
+  <name>HWall</name>
+  <summary>Linux hardware inventory and live sensor monitor</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <description>
+    <p>HWall presents Linux hardware inventory and live sensors through dedicated Hardware and Sensors views, including current, minimum, maximum, average, and session history.</p>
+  </description>
+  <launchable type="desktop-id">io.github.hwall.HWall.desktop</launchable>
+  <provides>
+    <binary>hwall</binary>
+  </provides>
+  <categories>
+    <category>System</category>
+    <category>Monitor</category>
+  </categories>
+</component>

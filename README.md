@@ -1,0 +1,138 @@
+# HWall
+
+HWall is a read-only Linux hardware monitor and inventory application written in Rust. It provides native GTK 4 and terminal interfaces, with a hierarchical sensor view inspired by HWiNFO64. HWall reports information exposed by Linux, firmware, hardware drivers, and installed read-only helper tools.
+
+## Features
+
+- Live temperatures, fan speeds, voltages, utilization, clocks, storage activity, network rates, and available power readings
+- Hierarchical **Sensors** and **Hardware** views in the GTK application
+- Current, minimum, maximum, and average values for the active monitoring session
+- Bounded in-memory sensor history with CSV and JSON Lines export
+- Per-sensor warning and critical alerts with duration, hysteresis, cooldown, and desktop notifications
+- Hardware inventory for processors, memory, graphics, storage, network, USB, PCI, batteries, firmware, and supported security devices
+- Optional SMART and NVMe health information
+- Human-readable reports, filtered sensor output, JSON export, JSON Lines streaming, and an interactive terminal monitor
+
+Hardware support depends on the interfaces exposed by the running kernel and the installed drivers. Missing readings are omitted rather than guessed.
+
+## Requirements
+
+- Rust 1.92 or newer
+- GTK 4.8 or newer development files for the graphical application
+- `pkg-config`
+- A standard C build toolchain
+
+### Runtime helpers
+
+HWall can operate from Linux kernel interfaces alone, but installing the applicable runtime helpers is strongly recommended. Some hardware information and telemetry are unavailable without the helper that provides them. HWall detects available helpers automatically and skips integrations that are unavailable.
+
+| Helper | Purpose |
+|---|---|
+| `lm-sensors` | **Strongly recommended.** Supplies configured sensor labels, motherboard-specific scaling, and improved interpretation of hwmon channels. HWall still reads ordinary hwmon sensors directly from sysfs. |
+| `hwdata` | Provides readable PCI vendor and device names through the local `pci.ids` database. |
+| `ethtool` | Adds network driver and firmware information. |
+| `smartmontools` | Required for detailed SMART health and lifetime information on supported SATA, SAS, and related drives. |
+| `nvme-cli` | Required for detailed NVMe health warnings and lifetime counters. |
+| NVIDIA utilities (`nvidia-smi`) | Required for complete NVIDIA telemetry. Package names vary by distribution and driver. |
+| `dmidecode` | Recommended for detailed motherboard, firmware, TPM, CPU-socket, and memory-module inventory. **Access may require administrator privileges.** It is used only for optional discovery enrichment, not normal live polling; when access is unavailable, HWall skips this enrichment. |
+
+For the most complete output, install the helpers relevant to the hardware in the system. Missing helpers do not prevent HWall from starting; only the affected information is omitted.
+
+### Example build dependencies:
+
+**Arch Linux**
+
+```bash
+sudo pacman -S --needed rust gtk4 pkgconf base-devel
+```
+
+**Debian or Ubuntu**
+
+```bash
+sudo apt install cargo rustc libgtk-4-dev pkg-config build-essential
+```
+
+**Fedora**
+```bash
+sudo dnf group install "Development Tools"
+sudo dnf install rust cargo gtk4-devel pkgconf-pkg-config
+```
+
+
+## Building
+
+Build the complete workspace:
+
+```bash
+cargo build --workspace --release
+```
+
+The binaries are written to:
+
+```text
+target/release/hwall
+target/release/hwall-cli
+```
+
+Build only the command-line application without GTK dependencies:
+
+```bash
+cargo build -p hwall-cli --release
+```
+
+Build the GUI without tray integration:
+
+```bash
+cargo build -p hwall-gui --release --no-default-features
+```
+
+## Installing
+
+Install both binaries together with the desktop entry and AppStream metadata:
+
+```bash
+sudo make install
+```
+
+The default prefix is `/usr/local`. `PREFIX` and `DESTDIR` can be overridden for staged installations; `make install-cli` installs only the command-line application.
+
+## Running
+
+Start the GTK application:
+
+```bash
+hwall
+```
+
+Print a hardware report:
+
+```bash
+hwall-cli report
+```
+
+Use `--no-helpers` for sysfs-only collection, `--sensitive` to include identifying values such as serial numbers and MAC addresses, and `--health` to request slower SMART and NVMe health collection.
+
+## CLI usage
+
+Common commands:
+
+```bash
+hwall-cli report
+hwall-cli sensors
+hwall-cli watch
+hwall-cli export --pretty
+```
+
+Examples:
+
+```bash
+hwall-cli sensors --class cpu
+hwall-cli sensors --device nvme --format json
+hwall-cli watch --interval 500ms
+hwall-cli watch --jsonl
+hwall-cli --health report
+hwall-cli --no-helpers report
+```
+
+`hwall-cli watch` opens the interactive terminal interface. Use `hwall-cli --help` or `hwall-cli <subcommand> --help` for the complete option list.
+

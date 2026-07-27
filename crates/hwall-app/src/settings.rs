@@ -1,0 +1,236 @@
+use crate::{project_dirs, AlertRule, LogFormat, LogScope, VisibilityState};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+use std::io;
+use std::path::PathBuf;
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Density {
+    #[default]
+    Compact,
+    Normal,
+    Comfortable,
+}
+
+impl Density {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Normal, Self::Comfortable];
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Normal => "normal",
+            Self::Comfortable => "comfortable",
+        }
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Compact => "Compact",
+            Self::Normal => "Normal",
+            Self::Comfortable => "Comfortable",
+        }
+    }
+
+    pub fn from_id(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|density| density.id() == value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ColumnSettings {
+    pub id: String,
+    pub width: i32,
+    pub visible: bool,
+}
+
+impl ColumnSettings {
+    pub fn new(id: impl Into<String>, width: i32, visible: bool) -> Self {
+        Self {
+            id: id.into(),
+            width,
+            visible,
+        }
+    }
+
+    pub fn default_layout() -> Vec<Self> {
+        vec![
+            Self::new("sensor", 420, true),
+            Self::new("current", 118, true),
+            Self::new("minimum", 118, true),
+            Self::new("maximum", 118, true),
+            Self::new("average", 118, true),
+            Self::new("status", 112, false),
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppSettings {
+    pub window_width: i32,
+    pub window_height: i32,
+    pub maximized: bool,
+    pub interval_ms: u64,
+    pub rediscover_seconds: u64,
+    pub health_interval_seconds: u64,
+    pub density: Density,
+    pub close_to_tray: bool,
+    pub start_hidden: bool,
+    pub plasma_window_placement: bool,
+    pub favorites_only: bool,
+    pub show_sensor_groups: bool,
+    pub device_order: Vec<String>,
+    pub sensor_aliases: BTreeMap<String, String>,
+    pub sensor_alerts: BTreeMap<String, AlertRule>,
+    pub columns: Vec<ColumnSettings>,
+    pub visibility: VisibilityState,
+    pub logging_format: LogFormat,
+    pub logging_scope: LogScope,
+    pub logging_directory: Option<PathBuf>,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            window_width: 1040,
+            window_height: 720,
+            maximized: false,
+            interval_ms: 1_000,
+            rediscover_seconds: 30,
+            health_interval_seconds: 1_800,
+            density: Density::Compact,
+            close_to_tray: false,
+            start_hidden: false,
+            plasma_window_placement: false,
+            favorites_only: false,
+            show_sensor_groups: false,
+            device_order: Vec::new(),
+            sensor_aliases: BTreeMap::new(),
+            sensor_alerts: BTreeMap::new(),
+            columns: ColumnSettings::default_layout(),
+            visibility: VisibilityState::default(),
+            logging_format: LogFormat::Csv,
+            logging_scope: LogScope::Visible,
+            logging_directory: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SettingsStore {
+    path: PathBuf,
+}
+
+impl SettingsStore {
+    pub fn discover() -> Self {
+        let path = project_dirs()
+            .map(|dirs| dirs.config_dir().join("settings.json"))
+            .unwrap_or_else(|| PathBuf::from("hwall-settings.json"));
+        Self { path }
+    }
+
+    #[cfg(test)]
+    fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn load(&self) -> AppSettings {
+        let Ok(bytes) = fs::read(&self.path) else {
+            return AppSettings::default();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_default()
+    }
+
+    pub fn save(&self, settings: &AppSettings) -> io::Result<()> {
+        let Some(parent) = self.path.parent() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "settings path has no parent",
+            ));
+        };
+        fs::create_dir_all(parent)?;
+        let temporary = self.path.with_extension("json.tmp");
+        let serialized = serde_json::to_vec_pretty(settings)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        fs::write(&temporary, serialized)?;
+        fs::rename(temporary, &self.path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn density_ids_round_trip() {
+        for density in Density::ALL {
+            assert_eq!(Density::from_id(density.id()), Some(density));
+        }
+        assert_eq!(Density::from_id("unknown"), None);
+    }
+
+    #[test]
+    fn status_column_is_hidden_by_default() {
+        let layout = ColumnSettings::default_layout();
+        let status = layout
+            .iter()
+            .find(|column| column.id == "status")
+            .expect("status column");
+        assert!(!status.visible);
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let path = std::env::temp_dir().join(format!(
+            "hwall-settings-test-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("main")
+        ));
+        let store = SettingsStore::at(&path);
+        let mut settings = AppSettings {
+            interval_ms: 750,
+            plasma_window_placement: true,
+            device_order: vec!["gpu:0".to_owned(), "cpu:0".to_owned()],
+            ..AppSettings::default()
+        };
+        settings.sensor_aliases.insert(
+            "sensor:cpu:temp".to_owned(),
+            "Package temperature".to_owned(),
+        );
+        settings.sensor_alerts.insert(
+            "sensor:cpu:temp".to_owned(),
+            AlertRule {
+                warning_above: Some(80.0),
+                critical_above: Some(90.0),
+                warning_color: Some("#ffaa00".to_owned()),
+                ..AlertRule::default()
+            },
+        );
+        settings
+            .visibility
+            .hide("sensor:cpu:temp", "CPU temperature");
+        store.save(&settings).expect("save settings");
+        let loaded = store.load();
+        assert_eq!(loaded.interval_ms, 750);
+        assert!(loaded.plasma_window_placement);
+        assert_eq!(loaded.device_order, vec!["gpu:0", "cpu:0"]);
+        assert_eq!(
+            loaded
+                .sensor_aliases
+                .get("sensor:cpu:temp")
+                .map(String::as_str),
+            Some("Package temperature"),
+        );
+        assert_eq!(
+            loaded
+                .sensor_alerts
+                .get("sensor:cpu:temp")
+                .and_then(|rule| rule.critical_above),
+            Some(90.0),
+        );
+        assert!(loaded.visibility.is_hidden("sensor:cpu:temp"));
+        let _ = fs::remove_file(path);
+    }
+}

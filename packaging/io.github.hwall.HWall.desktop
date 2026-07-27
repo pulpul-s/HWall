@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=HWall
+Comment=Linux hardware inventory and live sensor monitor
+Exec=hwall
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+Keywords=hardware;inventory;sensors;temperature;voltage;fan;monitor;
+StartupNotify=true
+StartupWMClass=io.github.hwall.HWall

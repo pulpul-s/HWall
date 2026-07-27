@@ -1,0 +1,12 @@
+[package]
+name = "hwall-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Linux hardware inventory and realtime telemetry CLI"
+
+[dependencies]
+clap.workspace = true
+serde_json.workspace = true
+hwall-core = { path = "../hwall-core" }
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache"] }

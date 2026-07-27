@@ -1,0 +1,133 @@
+.hwall-root {
+    background: @theme_bg_color;
+}
+
+.hwall-toolbar {
+    padding: 5px 7px;
+    border-bottom: 1px solid alpha(@borders, 0.75);
+}
+
+.hwall-toolbar button {
+    min-height: 26px;
+    min-width: 26px;
+    padding: 2px 7px;
+}
+
+.hwall-search {
+    min-height: 28px;
+}
+
+.hwall-table listview row {
+    min-height: 1px;
+    padding: 0;
+    margin: 0;
+}
+
+.hwall-table.density-compact .sensor-cell {
+    min-height: 20px;
+    padding: 1px 6px;
+    margin: 0;
+}
+
+.hwall-table.density-normal .sensor-cell {
+    min-height: 26px;
+    padding: 3px 6px;
+    margin: 0;
+}
+
+.hwall-table.density-comfortable .sensor-cell {
+    min-height: 32px;
+    padding: 6px;
+    margin: 0;
+}
+
+.hwall-table header button {
+    min-height: 26px;
+    padding: 2px 6px;
+}
+
+.numeric-cell {
+    font-feature-settings: "tnum" 1;
+}
+
+.hwall-table .device-cell {
+    font-weight: 700;
+    background: alpha(@theme_selected_bg_color, 0.11);
+    border-top: 1px solid alpha(@borders, 0.70);
+}
+
+.hwall-table .group-cell {
+    font-weight: 600;
+    background: alpha(@theme_fg_color, 0.045);
+}
+
+.hwall-table .alarm-cell {
+    color: @warning_color;
+    font-weight: 600;
+}
+
+.hwall-table .fault-cell {
+    color: @error_color;
+    font-weight: 600;
+}
+
+.hwall-statusbar {
+    padding: 3px 7px;
+    border-top: 1px solid alpha(@borders, 0.75);
+    color: alpha(@theme_fg_color, 0.75);
+}
+
+.hwall-status-right {
+    font-feature-settings: "tnum" 1;
+}
+
+.hidden-item-row {
+    padding: 4px 6px;
+}
+
+.history-chart {
+    min-height: 260px;
+    border: 1px solid alpha(@borders, 0.75);
+    border-radius: 6px;
+    background: alpha(@theme_fg_color, 0.025);
+}
+
+.hardware-navigation {
+    padding: 4px;
+    border-right: 1px solid alpha(@borders, 0.75);
+}
+
+.hardware-navigation row {
+    padding: 0;
+}
+
+.hardware-category {
+    padding: 5px 9px 8px 9px;
+    color: alpha(@theme_fg_color, 0.65);
+    font-weight: 700;
+}
+
+.hardware-category-separator {
+    margin: 12px 9px 6px 9px;
+    background-color: alpha(@borders, 0.75);
+}
+
+.hardware-device-title {
+    padding: 7px 14px 0 15px;
+    font-weight: 600;
+}
+
+.hardware-device-subtitle {
+    padding: 3px 14px 10px 15px;
+    color: alpha(@theme_fg_color, 0.65);
+}
+
+.hardware-sensor-group {
+    padding-top: 7px;
+    font-weight: 600;
+}
+
+.hardware-details-title {
+    font-size: 1.35em;
+    font-weight: 700;
+}

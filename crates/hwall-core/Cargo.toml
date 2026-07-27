@@ -1,0 +1,10 @@
+[package]
+name = "hwall-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Read-only Linux hardware inventory and telemetry collection library"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
