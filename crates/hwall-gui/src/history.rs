@@ -1,12 +1,18 @@
+use hwall_app::{
+    DEFAULT_HISTORY_RETENTION_SECONDS, MAX_HISTORY_RETENTION_SECONDS, MIN_HISTORY_RETENTION_SECONDS,
+};
 use hwall_core::{Sensor, SensorStatus, Snapshot, Unit};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-pub(super) const BACKGROUND_RETENTION: Duration = Duration::from_secs(60);
-pub(super) const DEFAULT_EXTENDED_RETENTION: Duration = Duration::from_secs(5 * 60);
-pub(super) const MAX_EXTENDED_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+pub(super) const MIN_HISTORY_RETENTION: Duration =
+    Duration::from_secs(MIN_HISTORY_RETENTION_SECONDS);
+pub(super) const DEFAULT_HISTORY_RETENTION: Duration =
+    Duration::from_secs(DEFAULT_HISTORY_RETENTION_SECONDS);
+pub(super) const MAX_HISTORY_RETENTION: Duration =
+    Duration::from_secs(MAX_HISTORY_RETENTION_SECONDS);
 const MIN_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 const MIN_CONNECTED_GAP: Duration = Duration::from_millis(2_500);
 
@@ -72,10 +78,10 @@ struct SeriesHistory {
 }
 
 impl SeriesHistory {
-    fn retention(&self) -> Duration {
+    fn retention(&self, global_retention: Duration) -> Duration {
         self.recording
-            .map(|recording| recording.retention)
-            .unwrap_or(BACKGROUND_RETENTION)
+            .map(|recording| recording.retention.max(global_retention))
+            .unwrap_or(global_retention)
     }
 
     fn push(&mut self, sample: TimedSample) {
@@ -96,8 +102,10 @@ impl SeriesHistory {
         self.samples.push_back(sample);
     }
 
-    fn prune(&mut self, now: Instant) {
-        let cutoff = now.checked_sub(self.retention()).unwrap_or(now);
+    fn prune(&mut self, now: Instant, global_retention: Duration) {
+        let cutoff = now
+            .checked_sub(self.retention(global_retention))
+            .unwrap_or(now);
         while self
             .samples
             .front()
@@ -125,6 +133,7 @@ pub(super) struct HistorySample {
 pub(super) struct HistoryStore {
     series: BTreeMap<SensorKey, SeriesHistory>,
     expected_interval: Duration,
+    global_retention: Duration,
 }
 
 impl Default for HistoryStore {
@@ -132,19 +141,38 @@ impl Default for HistoryStore {
         Self {
             series: BTreeMap::new(),
             expected_interval: Duration::from_secs(1),
+            global_retention: DEFAULT_HISTORY_RETENTION,
         }
     }
 }
 
 impl HistoryStore {
-    pub(super) fn shared(expected_interval: Duration) -> SharedHistory {
+    pub(super) fn shared(expected_interval: Duration, global_retention: Duration) -> SharedHistory {
         let mut history = Self::default();
         history.set_expected_interval(expected_interval);
+        history.set_global_retention(global_retention);
         Rc::new(RefCell::new(history))
     }
 
     pub(super) fn set_expected_interval(&mut self, interval: Duration) {
         self.expected_interval = interval.max(Duration::from_millis(100));
+    }
+
+    pub(super) fn global_retention(&self) -> Duration {
+        self.global_retention
+    }
+
+    pub(super) fn set_global_retention(&mut self, retention: Duration) {
+        self.set_global_retention_at(retention, Instant::now());
+    }
+
+    fn set_global_retention_at(&mut self, retention: Duration, now: Instant) {
+        self.global_retention = retention.clamp(MIN_HISTORY_RETENTION, MAX_HISTORY_RETENTION);
+        let global_retention = self.global_retention;
+        for series in self.series.values_mut() {
+            series.prune(now, global_retention);
+        }
+        self.series.retain(|_, series| !series.samples.is_empty());
     }
 
     pub(super) fn observe(&mut self, snapshot: &Snapshot) {
@@ -168,8 +196,9 @@ impl HistoryStore {
             }
         }
 
+        let global_retention = self.global_retention;
         for series in self.series.values_mut() {
-            series.prune(now);
+            series.prune(now, global_retention);
         }
         self.series.retain(|_, series| !series.samples.is_empty());
     }
@@ -189,12 +218,13 @@ impl HistoryStore {
         persistent: bool,
     ) {
         let now = Instant::now();
+        let global_retention = self.global_retention;
         let series = self.series.entry(key.clone()).or_default();
         series.recording = Some(ExtendedRecording {
-            retention: retention.clamp(BACKGROUND_RETENTION, MAX_EXTENDED_RETENTION),
+            retention: retention.clamp(MIN_HISTORY_RETENTION, MAX_HISTORY_RETENTION),
             persistent,
         });
-        series.prune(now);
+        series.prune(now, global_retention);
     }
 
     pub(super) fn set_persistent(&mut self, key: &SensorKey, persistent: bool) {
@@ -208,9 +238,10 @@ impl HistoryStore {
     }
 
     pub(super) fn stop_extended(&mut self, key: &SensorKey) {
+        let global_retention = self.global_retention;
         if let Some(series) = self.series.get_mut(key) {
             series.recording = None;
-            series.prune(Instant::now());
+            series.prune(Instant::now(), global_retention);
         }
         self.series.retain(|_, series| !series.samples.is_empty());
     }
@@ -258,7 +289,7 @@ impl HistoryStore {
             return Vec::new();
         };
         let cutoff = window.map(|window| {
-            let window = window.clamp(BACKGROUND_RETENTION, MAX_EXTENDED_RETENTION);
+            let window = window.clamp(MIN_HISTORY_RETENTION, MAX_HISTORY_RETENTION);
             now.checked_sub(window).unwrap_or(now)
         });
         series
@@ -283,7 +314,7 @@ impl HistoryStore {
         let Some(series) = self.series.get(key) else {
             return Vec::new();
         };
-        let window = window.clamp(BACKGROUND_RETENTION, MAX_EXTENDED_RETENTION);
+        let window = window.clamp(MIN_HISTORY_RETENTION, MAX_HISTORY_RETENTION);
         let cutoff = now.checked_sub(window).unwrap_or(now);
         let max_connected_gap = self
             .expected_interval
@@ -411,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn background_history_is_pruned_to_one_minute() {
+    fn global_history_is_pruned_to_configured_duration() {
         let start = Instant::now();
         let mut history = HistoryStore::default();
         for seconds in 0..=90 {
@@ -421,14 +452,14 @@ mod tests {
             );
         }
         let key = SensorKey::new("cpu:0", "usage");
-        assert!(history.available_duration(&key) <= BACKGROUND_RETENTION);
+        assert!(history.available_duration(&key) <= DEFAULT_HISTORY_RETENTION);
     }
 
     #[test]
     fn temporary_recording_stops_when_details_close() {
         let mut history = HistoryStore::default();
         let key = SensorKey::new("cpu:0", "usage");
-        history.start_extended(&key, DEFAULT_EXTENDED_RETENTION, false);
+        history.start_extended(&key, DEFAULT_HISTORY_RETENTION, false);
         history.close_details(&key);
         assert_eq!(history.extended_count(), 0);
     }
@@ -437,7 +468,7 @@ mod tests {
     fn persistent_recording_survives_details_close() {
         let mut history = HistoryStore::default();
         let key = SensorKey::new("cpu:0", "usage");
-        history.start_extended(&key, MAX_EXTENDED_RETENTION, true);
+        history.start_extended(&key, MAX_HISTORY_RETENTION, true);
         history.close_details(&key);
         assert_eq!(history.extended_count(), 1);
     }
@@ -448,12 +479,43 @@ mod tests {
         let mut history = HistoryStore::default();
         let key = SensorKey::new("cpu:0", "usage");
         history.observe_at(&snapshot(Some(1.0)), start);
-        history.start_extended(&key, MAX_EXTENDED_RETENTION, true);
+        history.start_extended(&key, MAX_HISTORY_RETENTION, true);
         history.observe_at(
             &Snapshot::new(),
-            start + MAX_EXTENDED_RETENTION + Duration::from_secs(1),
+            start + MAX_HISTORY_RETENTION + Duration::from_secs(1),
         );
         assert_eq!(history.extended_count(), 0);
+    }
+
+    #[test]
+    fn changing_global_retention_prunes_existing_history() {
+        let start = Instant::now();
+        let mut history = HistoryStore::default();
+        history.set_global_retention(Duration::from_secs(5 * 60));
+        for seconds in 0..=180 {
+            history.observe_at(
+                &snapshot(Some(seconds as f64)),
+                start + Duration::from_secs(seconds),
+            );
+        }
+        let key = SensorKey::new("cpu:0", "usage");
+        assert!(history.available_duration(&key) > DEFAULT_HISTORY_RETENTION);
+
+        history
+            .set_global_retention_at(DEFAULT_HISTORY_RETENTION, start + Duration::from_secs(180));
+        assert!(history.available_duration(&key) <= DEFAULT_HISTORY_RETENTION);
+    }
+
+    #[test]
+    fn per_sensor_retention_never_shortens_global_history() {
+        let mut history = HistoryStore::default();
+        history.set_global_retention(Duration::from_secs(60 * 60));
+        let key = SensorKey::new("cpu:0", "usage");
+        history.start_extended(&key, Duration::from_secs(5 * 60), false);
+        assert_eq!(
+            history.series[&key].retention(history.global_retention()),
+            Duration::from_secs(60 * 60),
+        );
     }
 
     #[test]

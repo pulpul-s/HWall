@@ -85,6 +85,12 @@ impl MonitorCollector {
         derived
     }
 
+    pub fn set_include_sensitive(&mut self, include_sensitive: bool) -> Snapshot {
+        self.full_options.include_sensitive = include_sensitive;
+        self.fast_options.include_sensitive = include_sensitive;
+        self.snapshot(true)
+    }
+
     pub fn refresh_storage_health(&mut self, device_ids: &[String], elevated: bool) -> Snapshot {
         let targets = self
             .base
@@ -116,6 +122,7 @@ pub struct MonitorUpdate {
     pub elapsed: Duration,
     pub forced_rediscovery: bool,
     pub storage_health_device_ids: Vec<String>,
+    pub include_sensitive: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +148,9 @@ enum MonitorCommand {
         device_ids: Vec<String>,
         elevated: bool,
     },
+    SetSensitive {
+        include_sensitive: bool,
+    },
 }
 
 pub struct MonitorWorker {
@@ -159,25 +169,38 @@ impl MonitorWorker {
             .spawn(move || {
                 while let Ok(command) = request_rx.recv() {
                     let started = Instant::now();
-                    let (snapshot, forced_rediscovery, storage_health_device_ids) = match command {
+                    let (
+                        snapshot,
+                        forced_rediscovery,
+                        storage_health_device_ids,
+                        include_sensitive,
+                    ) = match command {
                         MonitorCommand::Refresh { force_rediscovery } => (
                             collector.snapshot(force_rediscovery),
                             force_rediscovery,
                             Vec::new(),
+                            None,
                         ),
                         MonitorCommand::StorageHealth {
                             device_ids,
                             elevated,
                         } => {
                             let snapshot = collector.refresh_storage_health(&device_ids, elevated);
-                            (snapshot, false, device_ids)
+                            (snapshot, false, device_ids, None)
                         }
+                        MonitorCommand::SetSensitive { include_sensitive } => (
+                            collector.set_include_sensitive(include_sensitive),
+                            true,
+                            Vec::new(),
+                            Some(include_sensitive),
+                        ),
                     };
                     let update = MonitorUpdate {
                         snapshot,
                         elapsed: started.elapsed(),
                         forced_rediscovery,
                         storage_health_device_ids,
+                        include_sensitive,
                     };
                     if update_tx.send(update).is_err() {
                         break;
@@ -194,6 +217,10 @@ impl MonitorWorker {
 
     pub fn request(&self, force_rediscovery: bool) -> MonitorRequestResult {
         self.try_request(MonitorCommand::Refresh { force_rediscovery })
+    }
+
+    pub fn request_sensitive(&self, include_sensitive: bool) -> MonitorRequestResult {
+        self.try_request(MonitorCommand::SetSensitive { include_sensitive })
     }
 
     pub fn request_storage_health(

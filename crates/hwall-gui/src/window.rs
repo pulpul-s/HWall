@@ -91,7 +91,6 @@ pub(super) fn build(application: &Application, settings: &AppSettings) -> (Ui, T
         &actions.hidden,
         &logging_button,
         &actions.organize,
-        &actions.settings,
     ] {
         sensor_controls.append(button);
     }
@@ -102,6 +101,7 @@ pub(super) fn build(application: &Application, settings: &AppSettings) -> (Ui, T
     toolbar.append(&switcher);
     toolbar.append(&pause_button);
     toolbar.append(&actions.rediscover);
+    toolbar.append(&actions.settings);
     toolbar.append(&sensor_controls);
     toolbar.append(&search);
 

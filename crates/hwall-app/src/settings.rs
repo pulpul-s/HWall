@@ -4,6 +4,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
+
+pub const MIN_HISTORY_RETENTION_SECONDS: u64 = 60;
+pub const MAX_HISTORY_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+pub const DEFAULT_HISTORY_RETENTION_SECONDS: u64 = MIN_HISTORY_RETENTION_SECONDS;
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +86,8 @@ pub struct AppSettings {
     pub plasma_window_placement: bool,
     pub favorites_only: bool,
     pub show_sensor_groups: bool,
+    pub show_identifying_information: bool,
+    pub history_retention_seconds: u64,
     pub device_order: Vec<String>,
     pub sensor_aliases: BTreeMap<String, String>,
     pub sensor_alerts: BTreeMap<String, AlertRule>,
@@ -106,6 +113,8 @@ impl Default for AppSettings {
             plasma_window_placement: false,
             favorites_only: false,
             show_sensor_groups: false,
+            show_identifying_information: false,
+            history_retention_seconds: DEFAULT_HISTORY_RETENTION_SECONDS,
             device_order: Vec::new(),
             sensor_aliases: BTreeMap::new(),
             sensor_alerts: BTreeMap::new(),
@@ -115,6 +124,15 @@ impl Default for AppSettings {
             logging_scope: LogScope::Visible,
             logging_directory: None,
         }
+    }
+}
+
+impl AppSettings {
+    pub fn history_retention(&self) -> Duration {
+        Duration::from_secs(
+            self.history_retention_seconds
+                .clamp(MIN_HISTORY_RETENTION_SECONDS, MAX_HISTORY_RETENTION_SECONDS),
+        )
     }
 }
 
@@ -192,6 +210,8 @@ mod tests {
         let mut settings = AppSettings {
             interval_ms: 750,
             plasma_window_placement: true,
+            show_identifying_information: true,
+            history_retention_seconds: 3_600,
             device_order: vec!["gpu:0".to_owned(), "cpu:0".to_owned()],
             ..AppSettings::default()
         };
@@ -215,6 +235,8 @@ mod tests {
         let loaded = store.load();
         assert_eq!(loaded.interval_ms, 750);
         assert!(loaded.plasma_window_placement);
+        assert!(loaded.show_identifying_information);
+        assert_eq!(loaded.history_retention(), Duration::from_secs(3_600));
         assert_eq!(loaded.device_order, vec!["gpu:0", "cpu:0"]);
         assert_eq!(
             loaded

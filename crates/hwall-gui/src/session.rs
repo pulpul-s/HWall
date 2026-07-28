@@ -60,6 +60,9 @@ pub(super) struct Session {
     refresh_in_flight: bool,
     discard_in_flight_update: bool,
     force_rediscovery: bool,
+    desired_sensitive: bool,
+    pending_sensitive: Option<bool>,
+    in_flight_sensitive: Option<bool>,
     pending_health_refresh: Option<PendingHealthRefresh>,
     in_flight_health_refresh: Option<PendingHealthRefresh>,
     disconnected: bool,
@@ -73,6 +76,8 @@ impl Session {
         interval: Duration,
         rediscover: Duration,
         health_interval: Duration,
+        include_sensitive: bool,
+        history_retention: Duration,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let initialization = thread::Builder::new()
@@ -81,7 +86,7 @@ impl Session {
                 let options = CollectOptions {
                     profile: CollectionProfile::Full,
                     allow_helper_commands: true,
-                    include_sensitive: false,
+                    include_sensitive,
                     include_storage_health: false,
                 };
                 let collector = MonitorCollector::new(options, rediscover, health_interval);
@@ -96,12 +101,15 @@ impl Session {
             worker: None,
             snapshot: Snapshot::new(),
             statistics: SnapshotStatistics::new(),
-            history: HistoryStore::shared(interval),
+            history: HistoryStore::shared(interval, history_retention),
             interval,
             next_refresh: Instant::now() + interval,
             refresh_in_flight: false,
             discard_in_flight_update: false,
             force_rediscovery: false,
+            desired_sensitive: include_sensitive,
+            pending_sensitive: None,
+            in_flight_sensitive: None,
             pending_health_refresh: None,
             in_flight_health_refresh: None,
             disconnected,
@@ -158,14 +166,23 @@ impl Session {
             match worker.poll() {
                 MonitorPoll::Update(update) => {
                     self.refresh_in_flight = false;
+                    let sensitive_changed = update.include_sensitive.is_some()
+                        && self.in_flight_sensitive.take().is_some();
+                    let sensitive_is_current =
+                        update.include_sensitive == Some(self.desired_sensitive);
                     let storage_health_changed = !update.storage_health_device_ids.is_empty()
                         && self.in_flight_health_refresh.take().is_some();
-                    let apply =
-                        storage_health_changed || (!self.paused && !self.discard_in_flight_update);
+                    let administrative_update =
+                        storage_health_changed || (sensitive_changed && sensitive_is_current);
+                    let apply = if sensitive_changed {
+                        sensitive_is_current
+                    } else {
+                        administrative_update || (!self.paused && !self.discard_in_flight_update)
+                    };
                     self.discard_in_flight_update = false;
                     if apply {
                         self.snapshot = update.snapshot;
-                        if !storage_health_changed {
+                        if !administrative_update {
                             self.statistics.observe(&self.snapshot);
                             self.history.borrow_mut().observe(&self.snapshot);
                             result.telemetry_sample_changed = true;
@@ -189,6 +206,19 @@ impl Session {
             return;
         };
         if self.disconnected || self.refresh_in_flight {
+            return;
+        }
+
+        if let Some(include_sensitive) = self.pending_sensitive {
+            match worker.request_sensitive(include_sensitive) {
+                MonitorRequestResult::Accepted => {
+                    self.refresh_in_flight = true;
+                    self.in_flight_sensitive = Some(include_sensitive);
+                    self.pending_sensitive = None;
+                }
+                MonitorRequestResult::Busy => {}
+                MonitorRequestResult::Disconnected => self.disconnected = true,
+            }
             return;
         }
 
@@ -343,6 +373,19 @@ impl Session {
         self.interval = interval;
         self.history.borrow_mut().set_expected_interval(interval);
         self.next_refresh = Instant::now() + interval;
+    }
+
+    pub(super) fn set_history_retention(&mut self, retention: Duration) {
+        self.history.borrow_mut().set_global_retention(retention);
+    }
+
+    pub(super) fn set_identifying_information(&mut self, include_sensitive: bool) {
+        self.desired_sensitive = include_sensitive;
+        self.pending_sensitive = Some(include_sensitive);
+    }
+
+    pub(super) fn identifying_information_pending(&self) -> bool {
+        self.pending_sensitive.is_some() || self.in_flight_sensitive.is_some()
     }
 
     pub(super) fn logging(&self) -> bool {

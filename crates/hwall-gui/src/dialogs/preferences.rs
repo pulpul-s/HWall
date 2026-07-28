@@ -1,4 +1,6 @@
 use super::*;
+use crate::history::MAX_HISTORY_RETENTION;
+use crate::history_chart::DurationSelector;
 
 pub(crate) fn show_sensor_alias(
     parent: &ApplicationWindow,
@@ -132,10 +134,30 @@ pub(crate) fn show_settings(
     ));
     grid.attach(&show_sensor_groups, 0, 8, 2, 1);
 
+    let show_identifying_information = CheckButton::with_label("Show identifying information");
+    show_identifying_information.set_active(current.show_identifying_information);
+    show_identifying_information.set_tooltip_text(Some(concat!(
+        "Include available serial numbers, UUIDs, WWNs, MAC addresses and other ",
+        "hardware identifiers. Some values may require additional permissions."
+    )));
+    grid.attach(&show_identifying_information, 0, 9, 2, 1);
+
+    let history_retention = DurationSelector::new(
+        "",
+        current.history_retention(),
+        MAX_HISTORY_RETENTION,
+        |_| {},
+    );
+    history_retention.widget.set_tooltip_text(Some(concat!(
+        "Retain this amount of recent history for every numeric sensor. ",
+        "Longer periods use more memory."
+    )));
+    attach_labeled(&grid, 10, "Keep sensor history", &history_retention.widget);
+
     let columns_title = Label::new(Some("Visible columns"));
     columns_title.set_halign(Align::Start);
     columns_title.add_css_class("heading");
-    grid.attach(&columns_title, 0, 9, 2, 1);
+    grid.attach(&columns_title, 0, 11, 2, 1);
 
     let current_column = CheckButton::with_label("Current");
     current_column.set_active(table.column_visible("current"));
@@ -158,7 +180,7 @@ pub(crate) fn show_settings(
     ] {
         columns.append(check);
     }
-    grid.attach(&columns, 0, 10, 2, 1);
+    grid.attach(&columns, 0, 12, 2, 1);
 
     dialog.content_area().append(&grid);
     let table_for_response = table.clone();
@@ -188,6 +210,8 @@ pub(crate) fn show_settings(
             }
             updated.favorites_only = favorites_only.is_active();
             updated.show_sensor_groups = show_sensor_groups.is_active();
+            updated.show_identifying_information = show_identifying_information.is_active();
+            updated.history_retention_seconds = history_retention.duration().as_secs();
             for (id, visible) in [
                 ("current", current_column.is_active()),
                 ("minimum", minimum_column.is_active()),

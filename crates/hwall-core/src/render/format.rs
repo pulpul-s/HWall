@@ -1,187 +1,8 @@
 use crate::{
-    is_storage_health_property, Device, Identification, PropertyValue, Sensor, SensorKind,
-    SensorStatus, SnapshotStatistics, Unit,
+    is_storage_health_property, Identification, PropertyValue, Sensor, SensorKind, SensorStatus,
+    Unit,
 };
-use std::fmt::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-pub(super) const RULE_WIDTH: usize = 84;
-
-pub(super) fn report_title(out: &mut String, title: &str) {
-    ruled_heading(out, title, '=');
-}
-
-pub(super) fn section(out: &mut String, title: &str) {
-    ruled_heading(out, title, '-');
-}
-
-fn ruled_heading(out: &mut String, title: &str, rule: char) {
-    let _ = writeln!(out, "{title}");
-    let _ = writeln!(out, "{}", rule.to_string().repeat(RULE_WIDTH));
-}
-
-pub(super) fn device_heading(out: &mut String, name: &str, address: Option<&str>) {
-    match address {
-        Some(address) if !address.is_empty() => {
-            let _ = writeln!(out, "{name} [{address}]");
-        }
-        _ => {
-            let _ = writeln!(out, "{name}");
-        }
-    }
-    let _ = writeln!(out, "{}", "·".repeat(RULE_WIDTH));
-}
-
-pub(super) fn subsection(out: &mut String, title: &str) {
-    let _ = writeln!(out, "  {title}");
-}
-
-pub(super) fn property(out: &mut String, label: &str, value: impl AsRef<str>) {
-    let value = value.as_ref();
-    if value.is_empty() || is_placeholder(value) {
-        return;
-    }
-    let _ = writeln!(out, "    {label:<30} {value}");
-}
-
-pub(super) fn render_sensor_groups(out: &mut String, device: &Device) {
-    let mut current_kind = None;
-    for sensor in &device.sensors {
-        if current_kind != Some(sensor.kind) {
-            current_kind = Some(sensor.kind);
-            subsection(out, sensor_kind_name(sensor.kind));
-        }
-        sensor_line(out, sensor);
-    }
-}
-
-pub(super) fn render_sensor_groups_with<F>(out: &mut String, device: &Device, mut label: F)
-where
-    F: FnMut(&Sensor) -> String,
-{
-    let mut current_kind = None;
-    for sensor in &device.sensors {
-        if current_kind != Some(sensor.kind) {
-            current_kind = Some(sensor.kind);
-            subsection(out, sensor_kind_name(sensor.kind));
-        }
-        sensor_line_as(out, &label(sensor), sensor);
-    }
-}
-
-pub(super) fn render_sensor_groups_live(
-    out: &mut String,
-    device: &Device,
-    statistics: &SnapshotStatistics,
-) {
-    render_sensor_groups_with_live(out, device, statistics, |sensor| sensor.label.clone());
-}
-
-pub(super) fn render_sensor_groups_with_live<F>(
-    out: &mut String,
-    device: &Device,
-    statistics: &SnapshotStatistics,
-    mut label: F,
-) where
-    F: FnMut(&Sensor) -> String,
-{
-    let mut current_kind = None;
-    for sensor in &device.sensors {
-        if current_kind != Some(sensor.kind) {
-            current_kind = Some(sensor.kind);
-            subsection(out, sensor_kind_name(sensor.kind));
-            live_sensor_header(out);
-        }
-        live_sensor_line_as(out, device, &label(sensor), sensor, statistics);
-    }
-}
-
-fn sensor_line(out: &mut String, sensor: &Sensor) {
-    sensor_line_as(out, &sensor.label, sensor);
-}
-
-fn sensor_line_as(out: &mut String, label: &str, sensor: &Sensor) {
-    let value = sensor_display_value(sensor);
-    let suffix = sensor_status_suffix(sensor);
-    let _ = writeln!(out, "    {label:<46} {value:>20}{suffix}");
-    sensor_hardware_limits(out, sensor);
-}
-
-fn live_sensor_header(out: &mut String) {
-    let _ = writeln!(
-        out,
-        "    {:<29} {:>11} {:>11} {:>11} {:>11}",
-        "Reading", "Current", "Minimum", "Maximum", "Average"
-    );
-}
-
-fn live_sensor_line_as(
-    out: &mut String,
-    device: &Device,
-    label: &str,
-    sensor: &Sensor,
-    statistics: &SnapshotStatistics,
-) {
-    let label = truncate_with_ellipsis(label, 29);
-    let current = sensor_display_value(sensor);
-    let observed = statistics.get(&device.id, &sensor.id);
-    let minimum = observed
-        .map(|value| format_value(value.minimum, &sensor.unit))
-        .unwrap_or_else(|| "—".to_owned());
-    let maximum = observed
-        .map(|value| format_value(value.maximum, &sensor.unit))
-        .unwrap_or_else(|| "—".to_owned());
-    let average = observed
-        .map(|value| format_value(value.average, &sensor.unit))
-        .unwrap_or_else(|| "—".to_owned());
-    let suffix = sensor_status_suffix(sensor);
-    let _ = writeln!(
-        out,
-        "    {label:<29} {current:>11} {minimum:>11} {maximum:>11} {average:>11}{suffix}"
-    );
-    sensor_hardware_limits(out, sensor);
-}
-
-fn sensor_hardware_limits(out: &mut String, sensor: &Sensor) {
-    let mut limits = Vec::new();
-    if let Some(minimum) = sensor.min {
-        limits.push(format!("minimum {}", format_value(minimum, &sensor.unit)));
-    }
-    if let Some(maximum) = sensor.max {
-        limits.push(format!("maximum {}", format_value(maximum, &sensor.unit)));
-    }
-    if let Some(critical) = sensor.critical {
-        limits.push(format!("critical {}", format_value(critical, &sensor.unit)));
-    }
-    if !limits.is_empty() {
-        let _ = writeln!(out, "      Hardware limits: {}", limits.join(" • "));
-    }
-}
-
-fn truncate_with_ellipsis(value: &str, maximum: usize) -> String {
-    let characters: Vec<char> = value.chars().collect();
-    if characters.len() <= maximum {
-        return value.to_owned();
-    }
-    if maximum <= 1 {
-        return "…".to_owned();
-    }
-    characters
-        .into_iter()
-        .take(maximum - 1)
-        .chain(std::iter::once('…'))
-        .collect()
-}
-
-pub(super) fn sensor_display_value(sensor: &Sensor) -> String {
-    match sensor.value {
-        Some(value) => format_value(value, &sensor.unit),
-        None => sensor
-            .raw_value
-            .clone()
-            .unwrap_or_else(|| "unavailable".to_owned()),
-    }
-}
 
 pub(super) fn sensor_status_suffix(sensor: &Sensor) -> String {
     let mut suffix = match sensor.status {
@@ -384,14 +205,6 @@ pub fn sensor_kind_name(kind: SensorKind) -> &'static str {
     }
 }
 
-pub(super) fn string_property(device: &Device, key: &str) -> Option<String> {
-    device.properties.get(key).map(property_to_string)
-}
-
-pub(super) fn numeric_property(device: &Device, key: &str) -> Option<f64> {
-    device.properties.get(key).and_then(numeric_value)
-}
-
 pub fn property_to_string(value: &PropertyValue) -> String {
     match value {
         PropertyValue::String(value) => value.clone(),
@@ -407,6 +220,75 @@ pub fn property_to_string(value: &PropertyValue) -> String {
         }
         PropertyValue::Strings(values) => values.join(", "),
     }
+}
+
+pub fn format_property_value(key: &str, value: &PropertyValue) -> Option<String> {
+    let raw = property_to_string(value);
+    if is_placeholder(&raw) {
+        return None;
+    }
+
+    if key == "size_mb" {
+        return numeric_value(value).map(|value| format_bytes(value * 1024.0 * 1024.0));
+    }
+    if key.ends_with("_bytes")
+        || matches!(
+            key,
+            "logical_block_size" | "physical_block_size" | "minimum_io_size" | "optimal_io_size"
+        )
+    {
+        return numeric_value(value).map(format_bytes);
+    }
+    if key.ends_with("_frequency_hz") || key.ends_with("_freq_hz") {
+        return numeric_value(value).map(format_frequency);
+    }
+    if key == "speed_mbps" {
+        return numeric_value(value).map(format_network_speed);
+    }
+    if matches!(key, "configured_memory_speed" | "spd_speed") {
+        return Some(if raw.contains("MT/s") || raw.contains("MHz") {
+            raw
+        } else {
+            format!("{raw} MT/s")
+        });
+    }
+    if key == "configured_voltage" {
+        return Some(if raw.contains('V') {
+            raw
+        } else {
+            format!("{raw} V")
+        });
+    }
+    if key == "current_link_width" || key == "maximum_link_width" {
+        return Some(if raw.starts_with('x') {
+            raw
+        } else {
+            format!("x{raw}")
+        });
+    }
+    if key == "critical_warning" {
+        return Some(match numeric_value(value) {
+            Some(0.0) => "None".to_owned(),
+            Some(bits) => format!("0x{:02x}", bits as u64),
+            None => raw,
+        });
+    }
+    if matches!(
+        key,
+        "percentage_used" | "available_spare" | "spare_threshold" | "capacity"
+    ) {
+        return numeric_value(value).map(|value| format!("{value:.0} %"));
+    }
+    if matches!(
+        key,
+        "warning_temperature_time" | "critical_temperature_time"
+    ) {
+        return numeric_value(value).map(|value| format!("{value:.0} min"));
+    }
+    if key == "update_interval_ms" {
+        return numeric_value(value).map(|value| format!("{value:.0} ms"));
+    }
+    Some(raw)
 }
 
 pub(super) fn numeric_value(value: &PropertyValue) -> Option<f64> {

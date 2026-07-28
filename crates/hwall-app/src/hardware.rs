@@ -1,6 +1,6 @@
 use crate::{present_sensor, sensor_key, AlertRule, AlertState};
 use hwall_core::render::{
-    format_property_value, format_sample_age, hardware_device_visible, hardware_property_label,
+    format_property_value, format_sample_age, hardware_property_label,
     is_low_level_hardware_property, sensor_kind_name,
 };
 use hwall_core::{
@@ -916,6 +916,48 @@ fn property_priority(key: &str) -> usize {
         "cores" => 11,
         "threads" | "logical_cpus" => 12,
         _ => 100,
+    }
+}
+
+fn hardware_device_visible(device: &Device) -> bool {
+    match device.class {
+        DeviceClass::Storage => {
+            !device.id.starts_with("pci:")
+                && !device.property_bool("partition").unwrap_or(false)
+                && !device.name.starts_with("zram")
+        }
+        DeviceClass::Network => {
+            let name = device.bus_address.as_deref().unwrap_or(&device.name);
+            !matches!(name, "lo" | "docker0")
+                && !name.starts_with("veth")
+                && !name.starts_with("br-")
+                && !name.starts_with("virbr")
+                && !name.starts_with("tun")
+                && !name.starts_with("tap")
+        }
+        DeviceClass::Usb => {
+            let class = device.property_str("device_class").unwrap_or_default();
+            !device.name.starts_with("Linux ")
+                && class != "09"
+                && !device.name.to_ascii_lowercase().contains(" hub")
+        }
+        DeviceClass::Pci => {
+            let class = device.property_str("class_code").unwrap_or_default();
+            let normalized = class.trim_start_matches("0x");
+            !normalized.starts_with("06")
+                && !normalized.starts_with("03")
+                && !normalized.starts_with("02")
+                && !normalized.starts_with("010802")
+                && !device.name.contains("Dummy")
+                && !device.name.contains("Root Complex")
+                && !device.name.contains("Data Fabric")
+                && !device.name.contains("PCIe Switch")
+                && !device.name.contains("GPP Bridge")
+                && !device.name.contains("IOMMU")
+        }
+        DeviceClass::Thermal | DeviceClass::SensorController => !device.sensors.is_empty(),
+        DeviceClass::Other => !device.properties.is_empty() || !device.sensors.is_empty(),
+        _ => true,
     }
 }
 

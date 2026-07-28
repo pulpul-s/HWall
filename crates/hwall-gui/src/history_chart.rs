@@ -1,7 +1,4 @@
-use crate::history::{
-    SensorKey, SharedHistory, BACKGROUND_RETENTION, DEFAULT_EXTENDED_RETENTION,
-    MAX_EXTENDED_RETENTION,
-};
+use crate::history::{SensorKey, SharedHistory, MAX_HISTORY_RETENTION, MIN_HISTORY_RETENTION};
 use gtk::cairo;
 use gtk::prelude::*;
 use gtk::{
@@ -24,9 +21,10 @@ pub(super) fn panel(
     on_recording_changed: impl Fn() + 'static,
     on_exported: impl Fn(Result<PathBuf, String>) + 'static,
 ) -> gtk::Box {
+    let global_retention = history.borrow().global_retention();
     let existing_recording = history.borrow().recording(&key);
     let recording_state = existing_recording.unwrap_or(crate::history::ExtendedRecording {
-        retention: DEFAULT_EXTENDED_RETENTION,
+        retention: global_retention,
         persistent: false,
     });
     if existing_recording.is_none() {
@@ -37,7 +35,7 @@ pub(super) fn panel(
         );
     }
 
-    let view_window = Rc::new(Cell::new(BACKGROUND_RETENTION));
+    let view_window = Rc::new(Cell::new(global_retention));
     let root = gtk::Box::new(Orientation::Vertical, 8);
     root.set_margin_start(12);
     root.set_margin_end(12);
@@ -65,8 +63,8 @@ pub(super) fn panel(
     let view_window_for_change = Rc::clone(&view_window);
     let view = DurationSelector::new(
         "View",
-        BACKGROUND_RETENTION,
-        MAX_EXTENDED_RETENTION,
+        global_retention,
+        MAX_HISTORY_RETENTION,
         move |duration| {
             view_window_for_change.set(duration);
             chart_for_view.queue_draw();
@@ -79,8 +77,9 @@ pub(super) fn panel(
     let key_for_all = key.clone();
     let view_for_all = view.clone();
     all.connect_clicked(move |_| {
-        let available = history_for_all.borrow().available_duration(&key_for_all);
-        view_for_all.set_duration(available.max(BACKGROUND_RETENTION));
+        let history = history_for_all.borrow();
+        let available = history.available_duration(&key_for_all);
+        view_for_all.set_duration(available.max(history.global_retention()));
     });
     view_row.append(&all);
     root.append(&view_row);
@@ -96,7 +95,7 @@ pub(super) fn panel(
     let retention = DurationSelector::new(
         "Keep",
         recording_state.retention,
-        MAX_EXTENDED_RETENTION,
+        MAX_HISTORY_RETENTION,
         move |duration| {
             if recording_for_retention.is_active() {
                 let persistent = history_for_retention
@@ -250,8 +249,8 @@ fn update_available_label(label: &Label, history: &SharedHistory, key: &SensorKe
 }
 
 #[derive(Clone)]
-struct DurationSelector {
-    widget: gtk::Box,
+pub(crate) struct DurationSelector {
+    pub(crate) widget: gtk::Box,
     spin: SpinButton,
     unit: ComboBoxText,
     seconds: Rc<Cell<u64>>,
@@ -261,14 +260,16 @@ struct DurationSelector {
 }
 
 impl DurationSelector {
-    fn new(
+    pub(crate) fn new(
         label: &str,
         initial: Duration,
         maximum: Duration,
         on_changed: impl Fn(Duration) + 'static,
     ) -> Self {
         let widget = gtk::Box::new(Orientation::Horizontal, 6);
-        widget.append(&Label::new(Some(label)));
+        if !label.is_empty() {
+            widget.append(&Label::new(Some(label)));
+        }
 
         let spin = SpinButton::with_range(1.0, 1_440.0, 1.0);
         spin.set_numeric(true);
@@ -280,7 +281,11 @@ impl DurationSelector {
         unit.append(Some("hours"), "hours");
         widget.append(&unit);
 
-        let seconds = Rc::new(Cell::new(initial.as_secs().max(60)));
+        let seconds = Rc::new(Cell::new(
+            initial
+                .as_secs()
+                .clamp(MIN_HISTORY_RETENTION.as_secs(), maximum.as_secs()),
+        ));
         let updating = Rc::new(Cell::new(false));
         let callback: Rc<dyn Fn(Duration)> = Rc::new(on_changed);
         let selector = Self {
@@ -292,7 +297,11 @@ impl DurationSelector {
             max_seconds: maximum.as_secs(),
             callback: Rc::clone(&callback),
         };
-        selector.write_controls(initial.as_secs().max(60));
+        selector.write_controls(
+            initial
+                .as_secs()
+                .clamp(MIN_HISTORY_RETENTION.as_secs(), maximum.as_secs()),
+        );
 
         let unit_for_spin = selector.unit.downgrade();
         let seconds_for_spin = Rc::clone(&seconds);
@@ -332,12 +341,14 @@ impl DurationSelector {
         selector
     }
 
-    fn duration(&self) -> Duration {
+    pub(crate) fn duration(&self) -> Duration {
         Duration::from_secs(self.seconds.get())
     }
 
     fn set_duration(&self, duration: Duration) {
-        let seconds = duration.as_secs().clamp(60, self.max_seconds);
+        let seconds = duration
+            .as_secs()
+            .clamp(MIN_HISTORY_RETENTION.as_secs(), self.max_seconds);
         self.write_controls(seconds);
         let normalized = self.read_controls();
         self.seconds.set(normalized);

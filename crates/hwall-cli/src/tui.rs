@@ -2,6 +2,7 @@ mod app;
 mod header;
 
 use app::App;
+use hwall_app::TerminalView;
 use hwall_core::MonitorCollector;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::DefaultTerminal;
@@ -14,8 +15,9 @@ pub(crate) fn run(
     collector: MonitorCollector,
     interval: Duration,
     verbose: bool,
+    view: TerminalView,
 ) -> io::Result<()> {
-    let mut app = App::new(collector, interval, verbose)?;
+    let mut app = App::new(collector, interval, verbose, view)?;
     ratatui::run(|terminal| run_loop(terminal, &mut app))
 }
 

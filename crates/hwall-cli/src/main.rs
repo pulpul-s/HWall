@@ -2,9 +2,12 @@ mod sensors;
 mod tui;
 mod watch;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use hwall_app::{render_terminal_view, TerminalView};
 use hwall_core::render;
-use hwall_core::{collect_snapshot, CollectOptions, CollectionProfile, MonitorCollector};
+use hwall_core::{
+    collect_snapshot, CollectOptions, CollectionProfile, MonitorCollector, SnapshotStatistics,
+};
 use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -34,7 +37,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Print one human-readable report. This is the default command.
+    /// Print one human-readable mixed report.
     Report {
         /// Show transport nodes, raw properties, source paths, and sensor limits.
         #[arg(short, long)]
@@ -52,27 +55,65 @@ enum Command {
     Sensors(sensors::Args),
 
     /// Open an interactive, continuously updating terminal monitor.
-    Watch {
-        /// Refresh interval, for example 500ms, 1s, or 2m. Minimum: 100ms.
-        #[arg(short, long, default_value = "1s", value_parser = parse_duration)]
-        interval: Duration,
+    Watch(WatchArgs),
+}
 
-        /// Re-run full discovery at this interval for hotplug and label changes.
-        #[arg(long, default_value = "30s", value_parser = parse_duration)]
-        rediscover: Duration,
+#[derive(Debug, Clone, Args)]
+struct WatchArgs {
+    /// Refresh interval, for example 500ms, 1s, or 2m. Minimum: 100ms.
+    #[arg(short, long, default_value = "1s", value_parser = parse_duration)]
+    interval: Duration,
 
-        /// Refresh SMART/NVMe health at this interval when --health is enabled.
-        #[arg(long, default_value = "30m", value_parser = parse_duration)]
-        health_interval: Duration,
+    /// Re-run full discovery at this interval for hotplug and label changes.
+    #[arg(long, default_value = "30s", value_parser = parse_duration)]
+    rediscover: Duration,
 
-        /// Emit one compact JSON snapshot per line instead of opening the terminal UI.
-        #[arg(long)]
-        jsonl: bool,
+    /// Refresh SMART/NVMe health at this interval when --health is enabled.
+    #[arg(long, default_value = "30m", value_parser = parse_duration)]
+    health_interval: Duration,
 
-        /// Start the terminal monitor in exhaustive diagnostic mode.
-        #[arg(short, long)]
-        verbose: bool,
-    },
+    /// Initial terminal view.
+    #[arg(long, value_enum, default_value = "mixed")]
+    view: ViewArg,
+
+    /// Emit one compact JSON snapshot per line instead of opening the terminal UI.
+    #[arg(long)]
+    jsonl: bool,
+
+    /// Start the terminal monitor in exhaustive diagnostic mode.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+impl Default for WatchArgs {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(1),
+            rediscover: Duration::from_secs(30),
+            health_interval: Duration::from_secs(30 * 60),
+            view: ViewArg::Mixed,
+            jsonl: false,
+            verbose: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum ViewArg {
+    #[default]
+    Mixed,
+    Sensors,
+    Hardware,
+}
+
+impl From<ViewArg> for TerminalView {
+    fn from(value: ViewArg) -> Self {
+        match value {
+            ViewArg::Mixed => Self::Mixed,
+            ViewArg::Sensors => Self::Sensors,
+            ViewArg::Hardware => Self::Hardware,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -84,60 +125,57 @@ fn main() -> ExitCode {
         include_storage_health: cli.health,
     };
 
-    match cli.command.unwrap_or(Command::Report { verbose: false }) {
-        Command::Report { verbose } => {
-            let snapshot = collect_snapshot(&base_options);
-            print!("{}", render::human(&snapshot, verbose));
-            ExitCode::SUCCESS
-        }
-        Command::Export { pretty } => {
-            let snapshot = collect_snapshot(&base_options);
-            let result = if pretty {
-                serde_json::to_writer_pretty(io::stdout().lock(), &snapshot)
-            } else {
-                serde_json::to_writer(io::stdout().lock(), &snapshot)
-            };
-            match result {
-                Ok(()) => {
-                    println!();
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("failed to serialize snapshot: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Sensors(args) => sensors::run(args, base_options),
-        Command::Watch {
-            interval,
-            rediscover,
-            health_interval,
-            jsonl,
-            verbose,
-        } => run_watch(
-            base_options,
-            interval,
-            rediscover,
-            health_interval,
-            jsonl,
-            verbose,
-        ),
+    match cli.command {
+        None if io::stdout().is_terminal() => run_watch(base_options, WatchArgs::default()),
+        None => print_report(base_options, false),
+        Some(Command::Report { verbose }) => print_report(base_options, verbose),
+        Some(Command::Export { pretty }) => export_snapshot(base_options, pretty),
+        Some(Command::Sensors(args)) => sensors::run(args, base_options),
+        Some(Command::Watch(args)) => run_watch(base_options, args),
     }
 }
 
-fn run_watch(
-    full_options: CollectOptions,
-    interval: Duration,
-    rediscover: Duration,
-    health_interval: Duration,
-    jsonl: bool,
-    verbose: bool,
-) -> ExitCode {
-    let collector = MonitorCollector::new(full_options, rediscover, health_interval);
+fn print_report(options: CollectOptions, verbose: bool) -> ExitCode {
+    let snapshot = collect_snapshot(&options);
+    if verbose {
+        print!("{}", render::diagnostic(&snapshot, None));
+    } else {
+        print!(
+            "{}",
+            render_terminal_view(
+                &snapshot,
+                &SnapshotStatistics::default(),
+                TerminalView::Mixed,
+            )
+        );
+    }
+    ExitCode::SUCCESS
+}
 
-    if jsonl {
-        return watch::run_jsonl(collector, interval);
+fn export_snapshot(options: CollectOptions, pretty: bool) -> ExitCode {
+    let snapshot = collect_snapshot(&options);
+    let result = if pretty {
+        serde_json::to_writer_pretty(io::stdout().lock(), &snapshot)
+    } else {
+        serde_json::to_writer(io::stdout().lock(), &snapshot)
+    };
+    match result {
+        Ok(()) => {
+            println!();
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("failed to serialize snapshot: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_watch(full_options: CollectOptions, args: WatchArgs) -> ExitCode {
+    let collector = MonitorCollector::new(full_options, args.rediscover, args.health_interval);
+
+    if args.jsonl {
+        return watch::run_jsonl(collector, args.interval);
     }
 
     if !io::stdout().is_terminal() {
@@ -145,7 +183,7 @@ fn run_watch(
         return ExitCode::FAILURE;
     }
 
-    match tui::run(collector, interval, verbose) {
+    match tui::run(collector, args.interval, args.verbose, args.view.into()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("watch failed: {error}");
@@ -189,5 +227,10 @@ mod tests {
         assert_eq!(parse_duration("2s").unwrap(), Duration::from_secs(2));
         assert_eq!(parse_duration("1m").unwrap(), Duration::from_secs(60));
         assert!(parse_duration("50ms").is_err());
+    }
+
+    #[test]
+    fn watch_defaults_to_the_mixed_view() {
+        assert!(matches!(WatchArgs::default().view, ViewArg::Mixed));
     }
 }

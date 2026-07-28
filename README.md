@@ -9,8 +9,9 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 
 - Live temperatures, fan speeds, voltages, utilization, clocks, storage activity, network rates, and available power readings
 - Hierarchical **Sensors** and **Hardware** views in the GTK application
+- Switchable **Mixed**, **Sensors**, and **Hardware** views in the interactive terminal monitor
 - Current, minimum, maximum, and average values for the active monitoring session
-- Bounded in-memory sensor history with CSV and JSON Lines export
+- Configurable bounded in-memory sensor history with CSV and JSON Lines export
 - Per-sensor warning and critical alerts with duration, hysteresis, cooldown, and desktop notifications
 - Hardware inventory for processors, memory, graphics, storage, network, USB, PCI, batteries, firmware, and supported security devices
 - Optional SMART and NVMe health information
@@ -111,21 +112,24 @@ Start the GTK application:
 hwall
 ```
 
-Start the CLI application:
+Start the interactive CLI application:
+
 ```bash
-hwall-cli watch
+hwall-cli
 ```
 
 Use `--no-helpers` for sysfs-only collection, `--sensitive` to include identifying values such as serial numbers and MAC addresses, and `--health` to request slower SMART and NVMe health collection.
 
 ## CLI usage
 
-Common commands:
+Running `hwall-cli` in a terminal opens the interactive mixed view. When output is redirected, it prints one mixed report instead. Explicit commands remain available:
 
 ```bash
+hwall-cli
 hwall-cli report
 hwall-cli sensors
-hwall-cli watch
+hwall-cli watch --view sensors
+hwall-cli watch --view hardware
 hwall-cli export --pretty
 ```
 
@@ -135,10 +139,13 @@ Examples:
 hwall-cli sensors --class cpu
 hwall-cli sensors --device nvme --format json
 hwall-cli watch --interval 500ms
+hwall-cli watch --view sensors
 hwall-cli watch --jsonl
 hwall-cli --health report
 hwall-cli --no-helpers report
 ```
 
-`hwall-cli watch` opens the interactive terminal interface. Use `hwall-cli --help` or `hwall-cli <subcommand> --help` for the complete option list.
+The terminal interface starts in the mixed view. Use Tab or Shift-Tab to cycle between Mixed, Sensors, and Hardware, or press 1, 2, or 3 to select a view directly. Use `hwall-cli --help` or `hwall-cli <subcommand> --help` for the complete option list.
+
+In the GTK settings, **Show identifying information** enables available serial numbers, UUIDs, WWNs, MAC addresses, and related identifiers after an automatic hardware rediscovery. **Keep sensor history** controls both the global in-memory retention period and the default chart range for newly opened sensor Details windows. The default is 1 minute; the shared limit is 24 hours.
 

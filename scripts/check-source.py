@@ -101,7 +101,7 @@ def check_workspace() -> None:
     expected_dependencies = {
         "hwall-core": set(),
         "hwall-app": {"hwall-core"},
-        "hwall-cli": {"hwall-core"},
+        "hwall-cli": {"hwall-core", "hwall-app"},
         "hwall-gui": {"hwall-core", "hwall-app"},
     }
     if internal_dependencies != expected_dependencies:

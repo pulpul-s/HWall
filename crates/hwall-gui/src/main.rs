@@ -74,7 +74,13 @@ fn build_ui(application: &Application) {
     let interval = Duration::from_millis(initial.interval_ms.max(100));
     let rediscover = Duration::from_secs(initial.rediscover_seconds.max(5));
     let health_interval = Duration::from_secs(initial.health_interval_seconds.max(60));
-    let session = Session::spawn(interval, rediscover, health_interval);
+    let session = Session::spawn(
+        interval,
+        rediscover,
+        health_interval,
+        initial.show_identifying_information,
+        initial.history_retention(),
+    );
     let tray = TrayBridge::start();
     let (plasma_map_sync_pending, initial_notice) =
         synchronize_plasma_window_placement(initial.plasma_window_placement, false);
@@ -235,21 +241,36 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
             plasma_placement_available,
             move |settings| {
                 let interval = Duration::from_millis(settings.interval_ms.max(100));
+                let history_retention = settings.history_retention();
                 let density = settings.density;
                 let favorites_only = settings.favorites_only;
                 let placement_requested = settings.plasma_window_placement;
                 let allow_rule_creation = ui_after_apply.window.is_mapped();
                 let (plasma_map_sync_pending, placement_notice) =
                     synchronize_plasma_window_placement(placement_requested, allow_rule_creation);
-                {
+                let identifying_information_changed = {
                     let mut borrowed = model_after_apply.borrow_mut();
+                    let changed = borrowed.settings.show_identifying_information
+                        != settings.show_identifying_information;
                     borrowed.settings = settings;
                     borrowed.session.set_interval(interval);
+                    borrowed.session.set_history_retention(history_retention);
+                    if changed {
+                        let include_sensitive = borrowed.settings.show_identifying_information;
+                        borrowed
+                            .session
+                            .set_identifying_information(include_sensitive);
+                    }
                     borrowed.plasma_map_sync_pending = plasma_map_sync_pending;
-                }
+                    changed
+                };
                 ui_after_apply.table.set_density_class(density);
                 ui_after_apply.favorites_button.set_active(favorites_only);
                 update_plasma_notice(&model_after_apply, placement_notice);
+                if identifying_information_changed {
+                    model_after_apply.borrow_mut().notice =
+                        "Updating identifying information…".to_owned();
+                }
                 save_settings(&model_after_apply, &ui_after_apply);
                 rebuild_rows(&model_after_apply, &ui_after_apply);
             },
@@ -961,7 +982,11 @@ fn start_tick(model: SharedModel, ui: Ui) {
             Vec::new()
         };
         if snapshot_changed {
-            model.borrow_mut().notice.clear();
+            let identifying_information_pending =
+                model.borrow().session.identifying_information_pending();
+            if !identifying_information_pending {
+                model.borrow_mut().notice.clear();
+            }
             rebuild_rows(&model, &ui);
             if telemetry_sample_changed {
                 write_log_sample(&model);

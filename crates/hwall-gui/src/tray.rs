@@ -7,8 +7,7 @@ use std::sync::mpsc::{self, Receiver};
 #[cfg(feature = "tray")]
 const TRAY_ICON_SIZE: i32 = 64;
 #[cfg(feature = "tray")]
-const TRAY_ICON_ARGB: &[u8; 64 * 64 * 4] =
-    include_bytes!("../resources/hwall-tray-64.argb");
+const TRAY_ICON_ARGB: &[u8; 64 * 64 * 4] = include_bytes!("../resources/hwall-tray-64.argb");
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TrayAction {

@@ -1,4 +1,5 @@
 use super::header::{self, ActivityState, HeaderData};
+use hwall_app::{render_terminal_view, TerminalView};
 use hwall_core::{
     render, MonitorCollector, MonitorPoll, MonitorRequestResult, MonitorWorker, Snapshot,
     SnapshotStatistics,
@@ -38,6 +39,7 @@ pub(super) struct App {
     last_collection_duration: Option<Duration>,
     last_render_duration: Duration,
     paused: bool,
+    view: TerminalView,
     verbose: bool,
     quit: bool,
     dirty: bool,
@@ -59,6 +61,7 @@ impl App {
         collector: MonitorCollector,
         interval: Duration,
         verbose: bool,
+        view: TerminalView,
     ) -> io::Result<Self> {
         let snapshot = collector.initial_snapshot();
         let worker = MonitorWorker::spawn(collector)?;
@@ -82,6 +85,7 @@ impl App {
             last_collection_duration: None,
             last_render_duration: Duration::ZERO,
             paused: false,
+            view,
             verbose,
             quit: false,
             dirty: true,
@@ -216,7 +220,11 @@ impl App {
     fn rebuild_report(&mut self) {
         let started = Instant::now();
         let previous_match = self.current_match;
-        self.report = render::live(&self.snapshot, &self.statistics, self.verbose);
+        self.report = if self.verbose {
+            render::diagnostic(&self.snapshot, Some(&self.statistics))
+        } else {
+            render_terminal_view(&self.snapshot, &self.statistics, self.view)
+        };
         self.reconcile_current_match(previous_match);
         self.rebuild_styled_lines();
         self.last_render_duration = started.elapsed();
@@ -294,9 +302,9 @@ impl App {
         let last_line =
             (first_line + usize::from(self.viewport_height).saturating_sub(1)).min(total_lines);
         let mode = if self.verbose {
-            "diagnostic"
+            "Diagnostic"
         } else {
-            "hardware"
+            self.view.display_name()
         };
         let state = if self.paused {
             ActivityState::Paused
@@ -326,7 +334,7 @@ impl App {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Hardware report "),
+                    .title(format!(" {} ", self.report_title())),
             )
             .scroll((0, self.horizontal_scroll));
         frame.render_widget(report, chunks[1]);
@@ -335,8 +343,9 @@ impl App {
             InputMode::Search => format!("/{}", self.search_input),
             InputMode::Normal if !self.status_message.is_empty() => self.status_message.clone(),
             InputMode::Normal => concat!(
-                "↑↓/jk move  PgUp/PgDn page  ←→/hl sideways  / search  ",
-                "n/N match  Space pause  x reset stats  v diagnostic  r rediscover  ? help  q quit"
+                "↑↓/jk move  PgUp/PgDn page  ←→/hl sideways  / search  n/N match  ",
+                "Tab view  1/2/3 select  Space pause  x reset  v diagnostic  ",
+                "r rediscover  ? help  q quit"
             )
             .to_owned(),
         };
@@ -353,35 +362,40 @@ impl App {
     fn draw_help(&self, frame: &mut Frame<'_>, area: Rect) {
         let popup = centered_rect(76, 72, area);
         frame.render_widget(Clear, popup);
-        let help = Paragraph::new(
-            "Navigation\n\
-             ↑ / k       move up one line\n\
-             ↓ / j       move down one line\n\
-             Page Up     move up one screen\n\
-             Page Down   move down one screen\n\
-             b / f       previous / next screen\n\
-             Ctrl-U/D    previous / next half-screen\n\
-             Home / g    first line\n\
-             End / G     last line\n\
-             ← / h       scroll left\n\
-             → / l       scroll right\n\n\
-             Monitoring\n\
-             Space       pause or resume updates\n\
-             x           reset minimum / maximum / average\n\
-             r           queue full rediscovery\n\
-             v           hardware / diagnostic view\n\n\
-             Search\n\
-             /           enter a search\n\
-             n / N       next / previous match\n\n\
-             q / Esc     close help or quit\n\
-             ?           toggle this help",
-        )
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Keyboard help "),
-        )
-        .alignment(Alignment::Left);
+        let help_text = concat!(
+            "Navigation\n",
+            "↑ / k       move up one line\n",
+            "↓ / j       move down one line\n",
+            "Page Up     move up one screen\n",
+            "Page Down   move down one screen\n",
+            "b / f       previous / next screen\n",
+            "Ctrl-U/D    previous / next half-screen\n",
+            "Home / g    first line\n",
+            "End / G     last line\n",
+            "← / h       scroll left\n",
+            "→ / l       scroll right\n\n",
+            "Views\n",
+            "Tab         next view\n",
+            "Shift-Tab   previous view\n",
+            "1 / 2 / 3   mixed / sensors / hardware\n",
+            "v           toggle diagnostic report\n\n",
+            "Monitoring\n",
+            "Space       pause or resume updates\n",
+            "x           reset minimum / maximum / average\n",
+            "r           queue full rediscovery\n\n",
+            "Search\n",
+            "/           enter a search\n",
+            "n / N       next / previous match\n\n",
+            "q / Esc     close help or quit\n",
+            "?           toggle this help",
+        );
+        let help = Paragraph::new(help_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Keyboard help "),
+            )
+            .alignment(Alignment::Left);
         frame.render_widget(help, popup);
     }
 
@@ -475,13 +489,19 @@ impl App {
                     "Full hardware rediscovery requested".to_owned()
                 };
             }
+            KeyCode::Tab => self.switch_view(self.view.next()),
+            KeyCode::BackTab => self.switch_view(self.view.previous()),
+            KeyCode::Char('1') => self.switch_view(TerminalView::Mixed),
+            KeyCode::Char('2') => self.switch_view(TerminalView::Sensors),
+            KeyCode::Char('3') => self.switch_view(TerminalView::Hardware),
             KeyCode::Char('v') => {
                 self.verbose = !self.verbose;
+                self.reset_view_position();
                 self.rebuild_report();
                 self.status_message = if self.verbose {
                     "Diagnostic inventory enabled".to_owned()
                 } else {
-                    "Full hardware view enabled".to_owned()
+                    format!("{} view enabled", self.view.display_name())
                 };
             }
             KeyCode::Char('/') => {
@@ -500,6 +520,35 @@ impl App {
             }
             KeyCode::Char('?') => self.help = true,
             _ => {}
+        }
+    }
+
+    fn switch_view(&mut self, view: TerminalView) {
+        if self.view == view && !self.verbose {
+            return;
+        }
+        self.view = view;
+        self.verbose = false;
+        self.reset_view_position();
+        self.rebuild_report();
+        self.status_message = format!("{} view enabled", view.display_name());
+    }
+
+    fn reset_view_position(&mut self) {
+        self.vertical_scroll = 0;
+        self.horizontal_scroll = 0;
+        self.current_match = None;
+    }
+
+    fn report_title(&self) -> &'static str {
+        if self.verbose {
+            "Diagnostic report"
+        } else {
+            match self.view {
+                TerminalView::Mixed => "Mixed report",
+                TerminalView::Sensors => "Sensor report",
+                TerminalView::Hardware => "Hardware report",
+            }
         }
     }
 
