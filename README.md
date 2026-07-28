@@ -57,7 +57,6 @@ sudo apt install cargo rustc libgtk-4-dev pkg-config build-essential
 
 **Fedora**
 ```bash
-sudo dnf group install "Development Tools"
 sudo dnf install rust cargo gtk4-devel pkgconf-pkg-config
 ```
 
