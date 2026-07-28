@@ -15,7 +15,8 @@ WORKSPACE_INPUTS := Cargo.lock Cargo.toml rust-toolchain.toml \
 	$(shell find crates -type f -print)
 
 .PHONY: build release release-gui release-cli check test lint format \
-	verify-format verify-source install install-gui install-cli clean
+	verify-format verify-source install install-gui install-cli clean \
+	uninstall
 
 # One Cargo invocation produces both workspace binaries. Grouped targets also let
 # make reuse current binaries without invoking Cargo again.
@@ -83,3 +84,13 @@ install-cli: release-cli
 
 clean:
 	cargo clean
+
+uninstall:
+	$(RM) "$(DESTDIR)$(BINDIR)/hwall"
+	$(RM) "$(DESTDIR)$(BINDIR)/hwall-cli"
+	$(RM) "$(DESTDIR)$(DATADIR)/applications/io.github.hwall.HWall.desktop"
+	$(RM) "$(DESTDIR)$(DATADIR)/metainfo/io.github.hwall.HWall.metainfo.xml"
+	$(RM) "$(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/io.github.hwall.HWall.svg"
+	for size in 32 48 64; do \
+		$(RM) "$(DESTDIR)$(DATADIR)/icons/hicolor/$${size}x$${size}/apps/io.github.hwall.HWall.png"; \
+	done
