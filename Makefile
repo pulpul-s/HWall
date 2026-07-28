@@ -36,7 +36,7 @@ lint: lock
 format:
 	cargo fmt --all
 
-install: release
+install: lock release
 	install -Dm755 "$(RELEASE_DIR)/hwall" "$(DESTDIR)$(BINDIR)/hwall"
 	install -Dm755 "$(RELEASE_DIR)/hwall-cli" "$(DESTDIR)$(BINDIR)/hwall-cli"
 	install -Dm644 packaging/io.github.hwall.HWall.desktop \
