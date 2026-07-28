@@ -11,7 +11,7 @@ resolver = "2"
 version = "1.0.1"
 edition = "2021"
 rust-version = "1.92"
-authors = ["HWall contributors"]
+authors = ["pulpul-s"]
 
 [workspace.dependencies]
 clap = { version = "=4.6.4", features = ["derive"] }
