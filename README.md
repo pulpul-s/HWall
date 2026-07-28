@@ -97,7 +97,7 @@ Install both binaries together with the desktop entry, application icon, and App
 sudo make install
 ```
 
-The default prefix is `/usr/local`. `PREFIX` and `DESTDIR` can be overridden for staged installations; `make install-cli` installs only the command-line application. When replacing an older KDE launcher icon manually, run `kbuildsycoca6` once after installation or restart the desktop session.
+The default prefix is `/usr/local`. `PREFIX` and `DESTDIR` can be overridden for staged installations; `make install-cli` installs only the command-line application.
 
 ## Running
 
@@ -107,10 +107,9 @@ Start the GTK application:
 hwall
 ```
 
-Print a hardware report:
-
+Start the CLI application:
 ```bash
-hwall-cli report
+hwall-cli watch
 ```
 
 Use `--no-helpers` for sysfs-only collection, `--sensitive` to include identifying values such as serial numbers and MAC addresses, and `--health` to request slower SMART and NVMe health collection.
