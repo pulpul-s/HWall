@@ -91,13 +91,13 @@ cargo build -p hwall-gui --release --no-default-features
 
 ## Installing
 
-Install both binaries together with the desktop entry and AppStream metadata:
+Install both binaries together with the desktop entry, application icon, and AppStream metadata:
 
 ```bash
 sudo make install
 ```
 
-The default prefix is `/usr/local`. `PREFIX` and `DESTDIR` can be overridden for staged installations; `make install-cli` installs only the command-line application.
+The default prefix is `/usr/local`. `PREFIX` and `DESTDIR` can be overridden for staged installations; `make install-cli` installs only the command-line application. When replacing an older KDE launcher icon manually, run `kbuildsycoca6` once after installation or restart the desktop session.
 
 ## Running
 

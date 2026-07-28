@@ -4,6 +4,12 @@ use ksni::blocking::TrayMethods;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::{self, Receiver};
 
+#[cfg(feature = "tray")]
+const TRAY_ICON_SIZE: i32 = 64;
+#[cfg(feature = "tray")]
+const TRAY_ICON_ARGB: &[u8; 64 * 64 * 4] =
+    include_bytes!("../resources/hwall-tray-64.argb");
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TrayAction {
     Show,
@@ -72,8 +78,12 @@ impl ksni::Tray for HWallTray {
         "HWall".to_owned()
     }
 
-    fn icon_name(&self) -> String {
-        crate::APPLICATION_ICON.to_owned()
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        vec![ksni::Icon {
+            width: TRAY_ICON_SIZE,
+            height: TRAY_ICON_SIZE,
+            data: TRAY_ICON_ARGB.to_vec(),
+        }]
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {

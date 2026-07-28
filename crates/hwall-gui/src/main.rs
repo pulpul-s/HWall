@@ -29,8 +29,6 @@ use tray::{TrayAction, TrayBridge};
 use ui::restore_scroll_position;
 use window::{ToolbarActions, Ui};
 
-const APPLICATION_ICON: &str = "utilities-system-monitor";
-
 type SharedModel = Rc<RefCell<GuiModel>>;
 
 struct GuiModel {
@@ -58,7 +56,7 @@ fn main() -> glib::ExitCode {
 }
 
 fn activate(application: &Application) {
-    gtk::Window::set_default_icon_name(APPLICATION_ICON);
+    gtk::Window::set_default_icon_name(APPLICATION_ID);
     if let Some(window) = application
         .windows()
         .into_iter()

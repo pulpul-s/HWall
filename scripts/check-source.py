@@ -157,7 +157,12 @@ def check_metadata() -> None:
     app_id = "io.github.hwall.HWall"
 
     desktop = read(ROOT / "packaging" / f"{app_id}.desktop")
-    for line in ["Exec=hwall", "Terminal=false", f"StartupWMClass={app_id}"]:
+    for line in [
+        "Exec=hwall",
+        f"Icon={app_id}",
+        "Terminal=false",
+        f"StartupWMClass={app_id}",
+    ]:
         if line not in desktop.splitlines():
             fail(f"desktop entry is missing {line!r}")
 
@@ -177,18 +182,57 @@ def check_metadata() -> None:
         fail("AppStream metadata must retain its metadata-only CC0-1.0 license")
     if metadata.findtext("./launchable") != f"{app_id}.desktop":
         fail("AppStream launchable does not match the desktop file")
+    icon = metadata.find("icon")
+    if icon is None or icon.get("type") != "stock" or icon.text != app_id:
+        fail("AppStream icon does not match the installed application icon")
+    icon_path = (
+        ROOT
+        / "packaging"
+        / "icons"
+        / "hicolor"
+        / "scalable"
+        / "apps"
+        / f"{app_id}.svg"
+    )
+    if not icon_path.is_file():
+        fail("the scalable application icon is missing")
+    for size in (32, 48, 64):
+        png_path = (
+            ROOT
+            / "packaging"
+            / "icons"
+            / "hicolor"
+            / f"{size}x{size}"
+            / "apps"
+            / f"{app_id}.png"
+        )
+        if not png_path.is_file():
+            fail(f"the {size}px application icon is missing")
+
+    tray_source = read(GUI / "src" / "tray.rs")
+    tray_icon = GUI / "resources" / "hwall-tray-64.argb"
+    if tray_icon.stat().st_size != 64 * 64 * 4:
+        fail("the embedded tray icon is not a 64x64 ARGB32 image")
+    for token in [
+        'include_bytes!("../resources/hwall-tray-64.argb")',
+        "fn icon_pixmap(&self) -> Vec<ksni::Icon>",
+    ]:
+        if token not in tray_source:
+            fail(f"tray integration is missing {token!r}")
+    if "fn icon_name(&self)" in tray_source:
+        fail("the tray must use its embedded pixmap instead of an external icon-theme name")
 
     rust_text = "\n".join(read(path) for path in rust_sources(CRATES))
     if rust_text.count(f'"{app_id}"') != 1:
         fail("the Rust source must define the application ID exactly once")
-    if rust_text.count('"utilities-system-monitor"') != 1:
-        fail("the Rust source must define the application icon exactly once")
+    if "utilities-system-monitor" in rust_text:
+        fail("the generic system-monitor icon remains in Rust source")
 
     main = read(GUI / "src" / "main.rs")
     activate = re.search(r"fn activate\([^)]*\)\s*\{(.*?)\n\}", main, re.S)
     if (
         not activate
-        or "gtk::Window::set_default_icon_name(APPLICATION_ICON);"
+        or "gtk::Window::set_default_icon_name(APPLICATION_ID);"
         not in activate.group(1)
     ):
         fail("the GTK default icon must be set inside activate(), after GTK initialization")
@@ -299,6 +343,10 @@ def check_makefile() -> None:
         "$(DESTDIR)$(BINDIR)/hwall-cli",
         "$(DESTDIR)$(DATADIR)/applications/io.github.hwall.HWall.desktop",
         "$(DESTDIR)$(DATADIR)/metainfo/io.github.hwall.HWall.metainfo.xml",
+        "$(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/io.github.hwall.HWall.svg",
+        "for size in 32 48 64; do",
+        "packaging/icons/hicolor/$${size}x$${size}/apps/io.github.hwall.HWall.png",
+        "$(DESTDIR)$(DATADIR)/icons/hicolor/$${size}x$${size}/apps/io.github.hwall.HWall.png",
     ]
     for token in required:
         if token not in makefile:

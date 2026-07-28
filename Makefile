@@ -43,6 +43,12 @@ install: release
 		"$(DESTDIR)$(DATADIR)/applications/io.github.hwall.HWall.desktop"
 	install -Dm644 packaging/io.github.hwall.HWall.metainfo.xml \
 		"$(DESTDIR)$(DATADIR)/metainfo/io.github.hwall.HWall.metainfo.xml"
+	install -Dm644 packaging/icons/hicolor/scalable/apps/io.github.hwall.HWall.svg \
+		"$(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/io.github.hwall.HWall.svg"
+	for size in 32 48 64; do \
+		install -Dm644 "packaging/icons/hicolor/$${size}x$${size}/apps/io.github.hwall.HWall.png" \
+			"$(DESTDIR)$(DATADIR)/icons/hicolor/$${size}x$${size}/apps/io.github.hwall.HWall.png"; \
+	done
 
 install-cli: release-cli
 	install -Dm755 "$(RELEASE_DIR)/hwall-cli" "$(DESTDIR)$(BINDIR)/hwall-cli"

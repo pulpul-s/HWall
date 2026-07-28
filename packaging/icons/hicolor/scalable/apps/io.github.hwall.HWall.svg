@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bezel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22243d"/>
+      <stop offset="0.52" stop-color="#171828"/>
+      <stop offset="1" stop-color="#291629"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d8ff"/>
+      <stop offset="0.48" stop-color="#a96cff"/>
+      <stop offset="1" stop-color="#ff2aa8"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#061329"/>
+      <stop offset="0.55" stop-color="#0b0921"/>
+      <stop offset="1" stop-color="#21091d"/>
+    </linearGradient>
+    <filter id="soft-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="line-glow" x="-40%" y="-80%" width="180%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="screen-clip">
+      <rect x="62" y="140" width="388" height="232" rx="22"/>
+    </clipPath>
+  </defs>
+
+  <rect x="18" y="94" width="476" height="324" rx="38"
+        fill="url(#bezel)" stroke="#050610" stroke-width="8"/>
+  <rect x="24" y="100" width="464" height="312" rx="32"
+        fill="none" stroke="url(#neon)" stroke-width="5" opacity="0.9" filter="url(#soft-glow)"/>
+
+  <rect x="48" y="126" width="416" height="260" rx="28"
+        fill="#070711" stroke="#05050a" stroke-width="10"/>
+  <rect x="58" y="136" width="396" height="240" rx="24"
+        fill="url(#screen)" stroke="url(#neon)" stroke-width="4"/>
+
+  <g clip-path="url(#screen-clip)" opacity="0.22" stroke="#7c69c9" stroke-width="2">
+    <path d="M62 178H450M62 218H450M62 258H450M62 298H450M62 338H450"/>
+    <path d="M110 140V372M158 140V372M206 140V372M254 140V372M302 140V372M350 140V372M398 140V372"/>
+  </g>
+
+  <path d="M76 292 L103 253 L124 274 L149 199 L177 303 L204 245 L226 279 L249 211 L274 313 L300 238 L322 265 L345 178 L371 297 L394 238 L414 276 L438 248"
+        fill="none" stroke="url(#neon)" stroke-width="16"
+        stroke-linecap="round" stroke-linejoin="round" filter="url(#line-glow)"/>
+  <path d="M76 292 L103 253 L124 274 L149 199 L177 303 L204 245 L226 279 L249 211 L274 313 L300 238 L322 265 L345 178 L371 297 L394 238 L414 276 L438 248"
+        fill="none" stroke="url(#neon)" stroke-width="8"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

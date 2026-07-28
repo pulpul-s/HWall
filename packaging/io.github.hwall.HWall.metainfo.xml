@@ -8,6 +8,7 @@
     <p>HWall presents Linux hardware inventory and live sensors through dedicated Hardware and Sensors views, including current, minimum, maximum, average, and session history.</p>
   </description>
   <launchable type="desktop-id">io.github.hwall.HWall.desktop</launchable>
+  <icon type="stock">io.github.hwall.HWall</icon>
   <provides>
     <binary>hwall</binary>
   </provides>
