@@ -12,6 +12,36 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+#[derive(Clone, Copy)]
+enum ViewRange {
+    Fixed(Duration),
+    AllAvailable,
+}
+
+#[derive(Clone, Copy)]
+struct ChartWindow {
+    duration: Duration,
+    end: Instant,
+}
+
+impl ViewRange {
+    fn window(self, available: Option<(Instant, Duration)>, now: Instant) -> ChartWindow {
+        match self {
+            Self::Fixed(duration) => ChartWindow { duration, end: now },
+            Self::AllAvailable => available.map_or(
+                ChartWindow {
+                    duration: MIN_HISTORY_RETENTION,
+                    end: now,
+                },
+                |(end, duration)| ChartWindow {
+                    duration: duration.max(MIN_HISTORY_RETENTION),
+                    end,
+                },
+            ),
+        }
+    }
+}
+
 pub(super) fn panel(
     history: SharedHistory,
     key: SensorKey,
@@ -35,7 +65,7 @@ pub(super) fn panel(
         );
     }
 
-    let view_window = Rc::new(Cell::new(global_retention));
+    let view_range = Rc::new(Cell::new(ViewRange::Fixed(global_retention)));
     let root = gtk::Box::new(Orientation::Vertical, 8);
     root.set_margin_start(12);
     root.set_margin_end(12);
@@ -52,7 +82,7 @@ pub(super) fn panel(
         &chart,
         Rc::clone(&history),
         key.clone(),
-        Rc::clone(&view_window),
+        Rc::clone(&view_range),
         unit,
     );
     root.append(&chart);
@@ -60,13 +90,13 @@ pub(super) fn panel(
     let view_row = gtk::Box::new(Orientation::Horizontal, 10);
     view_row.set_halign(Align::Fill);
     let chart_for_view = chart.clone();
-    let view_window_for_change = Rc::clone(&view_window);
+    let view_range_for_change = Rc::clone(&view_range);
     let view = DurationSelector::new(
         "View",
         global_retention,
         MAX_HISTORY_RETENTION,
         move |duration| {
-            view_window_for_change.set(duration);
+            view_range_for_change.set(ViewRange::Fixed(duration));
             chart_for_view.queue_draw();
         },
     );
@@ -76,10 +106,16 @@ pub(super) fn panel(
     let history_for_all = Rc::clone(&history);
     let key_for_all = key.clone();
     let view_for_all = view.clone();
+    let view_range_for_all = Rc::clone(&view_range);
+    let chart_for_all = chart.clone();
     all.connect_clicked(move |_| {
-        let history = history_for_all.borrow();
-        let available = history.available_duration(&key_for_all);
-        view_for_all.set_duration(available.max(history.global_retention()));
+        let window = ViewRange::AllAvailable.window(
+            history_for_all.borrow().available_range(&key_for_all),
+            Instant::now(),
+        );
+        view_range_for_all.set(ViewRange::AllAvailable);
+        view_for_all.set_display_duration(window.duration);
+        chart_for_all.queue_draw();
     });
     view_row.append(&all);
     root.append(&view_row);
@@ -182,7 +218,7 @@ pub(super) fn panel(
 
     let history_for_export = Rc::clone(&history);
     let key_for_export = key.clone();
-    let view_window_for_export = Rc::clone(&view_window);
+    let view_range_for_export = Rc::clone(&view_range);
     let exported: Rc<dyn Fn(Result<PathBuf, String>)> = Rc::new(on_exported);
     export.connect_clicked(move |_| {
         let format = export_format
@@ -190,13 +226,20 @@ pub(super) fn panel(
             .as_deref()
             .and_then(LogFormat::from_id)
             .unwrap_or_default();
-        let window = match export_range.active_id().as_deref() {
-            Some("view") => Some(view_window_for_export.get()),
-            _ => None,
+        let now = Instant::now();
+        let chart_window = {
+            let history = history_for_export.borrow();
+            view_range_for_export
+                .get()
+                .window(history.available_range(&key_for_export), now)
+        };
+        let (window, end) = match export_range.active_id().as_deref() {
+            Some("view") => (Some(chart_window.duration), chart_window.end),
+            _ => (None, now),
         };
         let samples = history_for_export
             .borrow()
-            .samples(&key_for_export, window, Instant::now());
+            .samples(&key_for_export, window, end);
         let path = timestamped_log_path(default_log_directory(), format);
         let result = export_samples(&path, format, &row_template, unit, &samples)
             .map(|()| path)
@@ -207,11 +250,20 @@ pub(super) fn panel(
     changed();
     let weak_chart = chart.downgrade();
     let history_for_tick = Rc::clone(&history);
+    let view_range_for_tick = Rc::clone(&view_range);
+    let view_for_tick = view.clone();
     let key_for_tick = key;
     glib::timeout_add_local(Duration::from_millis(500), move || {
         let Some(chart) = weak_chart.upgrade() else {
             return glib::ControlFlow::Break;
         };
+        if matches!(view_range_for_tick.get(), ViewRange::AllAvailable) {
+            let window = ViewRange::AllAvailable.window(
+                history_for_tick.borrow().available_range(&key_for_tick),
+                Instant::now(),
+            );
+            view_for_tick.set_display_duration(window.duration);
+        }
         update_available_label(&available, &history_for_tick, &key_for_tick);
         chart.queue_draw();
         glib::ControlFlow::Continue
@@ -256,7 +308,6 @@ pub(crate) struct DurationSelector {
     seconds: Rc<Cell<u64>>,
     updating: Rc<Cell<bool>>,
     max_seconds: u64,
-    callback: Rc<dyn Fn(Duration)>,
 }
 
 impl DurationSelector {
@@ -295,7 +346,6 @@ impl DurationSelector {
             seconds: Rc::clone(&seconds),
             updating: Rc::clone(&updating),
             max_seconds: maximum.as_secs(),
-            callback: Rc::clone(&callback),
         };
         selector.write_controls(
             initial
@@ -345,14 +395,13 @@ impl DurationSelector {
         Duration::from_secs(self.seconds.get())
     }
 
-    fn set_duration(&self, duration: Duration) {
+    fn set_display_duration(&self, duration: Duration) {
         let seconds = duration
             .as_secs()
             .clamp(MIN_HISTORY_RETENTION.as_secs(), self.max_seconds);
         self.write_controls(seconds);
         let normalized = self.read_controls();
         self.seconds.set(normalized);
-        (self.callback)(Duration::from_secs(normalized));
     }
 
     fn set_sensitive(&self, sensitive: bool) {
@@ -425,7 +474,7 @@ fn install_draw_func(
     chart: &DrawingArea,
     history: SharedHistory,
     key: SensorKey,
-    view_window: Rc<Cell<Duration>>,
+    view_range: Rc<Cell<ViewRange>>,
     unit: Unit,
 ) {
     chart.set_draw_func(move |_area, context, width, height| {
@@ -452,14 +501,14 @@ fn install_draw_func(
         let _ = context.stroke();
 
         let max_points = plot_width.max(64.0) as usize;
-        let points =
-            history
-                .borrow()
-                .chart_points(&key, view_window.get(), Instant::now(), max_points);
+        let now = Instant::now();
+        let history = history.borrow();
+        let window = view_range.get().window(history.available_range(&key), now);
+        let points = history.chart_points(&key, window.duration, window.end, max_points);
         let mut values = points.iter().filter_map(|point| point.value);
         let Some(first) = values.next() else {
             draw_empty(context, left, top + plot_height / 2.0);
-            draw_time_labels(context, left, right, bottom, view_window.get());
+            draw_time_labels(context, left, right, bottom, window.duration);
             return;
         };
         let (mut minimum, mut maximum) = values.fold((first, first), |bounds, value| {
@@ -500,7 +549,7 @@ fn install_draw_func(
         }
 
         draw_value_labels(context, top, bottom, minimum, maximum, unit);
-        draw_time_labels(context, left, right, bottom, view_window.get());
+        draw_time_labels(context, left, right, bottom, window.duration);
     });
 }
 
@@ -550,5 +599,21 @@ fn duration_label(duration: Duration) -> String {
     } else {
         let minutes = seconds.div_ceil(60);
         format!("{minutes} min")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_available_uses_the_recorded_range() {
+        let now = Instant::now();
+        let latest = now - Duration::from_secs(5);
+        let recorded = Duration::from_secs(7 * 60);
+        let window = ViewRange::AllAvailable.window(Some((latest, recorded)), now);
+
+        assert_eq!(window.duration, recorded);
+        assert_eq!(window.end, latest);
     }
 }

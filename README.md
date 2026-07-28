@@ -72,7 +72,7 @@ make install
 Build the complete workspace without installing:
 
 ```bash
-cargo build --workspace --release
+cargo build --locked --workspace --release
 ```
 
 The binaries are written to:
@@ -85,13 +85,13 @@ target/release/hwall-cli
 Build only the command-line application without GTK dependencies:
 
 ```bash
-cargo build -p hwall-cli --release
+cargo build --locked -p hwall-cli --release
 ```
 
 Build the GUI without tray integration:
 
 ```bash
-cargo build -p hwall-gui --release --no-default-features
+cargo build --locked -p hwall-gui --release --no-default-features
 ```
 
 ## Installing
@@ -102,7 +102,7 @@ Install both binaries together with the desktop entry, application icon, and App
 sudo make install
 ```
 
-The default prefix is `/usr/local`. `PREFIX` and `DESTDIR` can be overridden for staged installations; `make install-cli` installs only the command-line application.
+The default prefix is `/usr/local`. `PREFIX` and `DESTDIR` can be overridden for staged installations; `make install-gui` and `make install-cli` install only the selected application. The committed `Cargo.lock` is used for reproducible builds. `make install` performs one workspace release build when either binary is missing or older than the source, and otherwise installs the existing binaries without invoking Cargo. Use `make clean` to remove build artifacts.
 
 ## Running
 

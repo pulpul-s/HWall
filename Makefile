@@ -11,42 +11,29 @@ DEBUG_CLI := $(DEBUG_DIR)/hwall-cli
 RELEASE_GUI := $(RELEASE_DIR)/hwall
 RELEASE_CLI := $(RELEASE_DIR)/hwall-cli
 
-MANIFESTS := Cargo.toml $(wildcard crates/*/Cargo.toml)
-CORE_INPUTS := $(shell find crates/hwall-core -type f -print)
-APP_INPUTS := $(shell find crates/hwall-app -type f -print)
-GUI_INPUTS := $(CORE_INPUTS) $(APP_INPUTS) $(shell find crates/hwall-gui -type f -print) $(MANIFESTS)
-CLI_INPUTS := $(CORE_INPUTS) $(APP_INPUTS) $(shell find crates/hwall-cli -type f -print) $(MANIFESTS)
+WORKSPACE_INPUTS := Cargo.lock Cargo.toml rust-toolchain.toml \
+	$(shell find crates -type f -print)
 
-.PHONY: lock build release release-gui release-cli check test lint format \
+.PHONY: build release release-gui release-cli check test lint format \
 	verify-format verify-source install install-gui install-cli clean
 
-Cargo.lock: $(MANIFESTS)
-	cargo generate-lockfile
+# One Cargo invocation produces both workspace binaries. Grouped targets also let
+# make reuse current binaries without invoking Cargo again.
+$(DEBUG_GUI) $(DEBUG_CLI) &: $(WORKSPACE_INPUTS)
+	cargo build --locked --workspace
 
-lock: Cargo.lock
-	@cargo metadata --locked --format-version 1 >/dev/null
+build: $(DEBUG_GUI) $(DEBUG_CLI)
 
-$(DEBUG_GUI): Cargo.lock $(GUI_INPUTS)
-	cargo build --locked -p hwall-gui
+$(RELEASE_GUI) $(RELEASE_CLI) &: $(WORKSPACE_INPUTS)
+	cargo build --locked --workspace --release
 
-$(DEBUG_CLI): Cargo.lock $(CLI_INPUTS)
-	cargo build --locked -p hwall-cli
+release: $(RELEASE_GUI) $(RELEASE_CLI)
 
-build: lock $(DEBUG_GUI) $(DEBUG_CLI)
+release-gui: $(RELEASE_GUI)
 
-$(RELEASE_GUI): Cargo.lock $(GUI_INPUTS)
-	cargo build --locked -p hwall-gui --release
+release-cli: $(RELEASE_CLI)
 
-$(RELEASE_CLI): Cargo.lock $(CLI_INPUTS)
-	cargo build --locked -p hwall-cli --release
-
-release-gui: lock $(RELEASE_GUI)
-
-release-cli: lock $(RELEASE_CLI)
-
-release: release-gui release-cli
-
-check: lock verify-format verify-source
+check: Cargo.lock verify-format verify-source
 	cargo check --locked --workspace --all-targets
 
 verify-format:
@@ -55,16 +42,28 @@ verify-format:
 verify-source:
 	python3 scripts/check-source.py
 
-test: lock
+test: Cargo.lock
 	cargo test --locked --workspace --all-features
 
-lint: lock
+lint: Cargo.lock
 	cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 format:
 	cargo fmt --all
 
-install: install-gui install-cli
+install: release
+	install -Dm755 "$(RELEASE_GUI)" "$(DESTDIR)$(BINDIR)/hwall"
+	install -Dm755 "$(RELEASE_CLI)" "$(DESTDIR)$(BINDIR)/hwall-cli"
+	install -Dm644 packaging/io.github.hwall.HWall.desktop \
+		"$(DESTDIR)$(DATADIR)/applications/io.github.hwall.HWall.desktop"
+	install -Dm644 packaging/io.github.hwall.HWall.metainfo.xml \
+		"$(DESTDIR)$(DATADIR)/metainfo/io.github.hwall.HWall.metainfo.xml"
+	install -Dm644 packaging/icons/hicolor/scalable/apps/io.github.hwall.HWall.svg \
+		"$(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/io.github.hwall.HWall.svg"
+	for size in 32 48 64; do \
+		install -Dm644 "packaging/icons/hicolor/$${size}x$${size}/apps/io.github.hwall.HWall.png" \
+			"$(DESTDIR)$(DATADIR)/icons/hicolor/$${size}x$${size}/apps/io.github.hwall.HWall.png"; \
+	done
 
 install-gui: release-gui
 	install -Dm755 "$(RELEASE_GUI)" "$(DESTDIR)$(BINDIR)/hwall"

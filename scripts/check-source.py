@@ -77,6 +77,17 @@ def check_checksums() -> None:
 
 
 def check_workspace() -> None:
+    lockfile = ROOT / "Cargo.lock"
+    if not lockfile.is_file():
+        fail("Cargo.lock must be included in the source tree")
+    ignored = {
+        line.strip()
+        for line in read(ROOT / ".gitignore").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    if "Cargo.lock" in ignored:
+        fail("Cargo.lock must not be ignored")
+
     workspace = manifest(ROOT / "Cargo.toml")
     expected_members = {
         "crates/hwall-core",
@@ -336,9 +347,15 @@ def check_css() -> None:
 def check_makefile() -> None:
     makefile = read(ROOT / "Makefile")
     required = [
-        "release-cli: lock",
+        "WORKSPACE_INPUTS := Cargo.lock",
+        "$(DEBUG_GUI) $(DEBUG_CLI) &:",
+        "$(RELEASE_GUI) $(RELEASE_CLI) &:",
+        "cargo build --locked --workspace",
+        "cargo build --locked --workspace --release",
         "install: release",
+        "install-gui: release-gui",
         "install-cli: release-cli",
+        "clean:",
         "$(DESTDIR)$(BINDIR)/hwall",
         "$(DESTDIR)$(BINDIR)/hwall-cli",
         "$(DESTDIR)$(DATADIR)/applications/io.github.hwall.HWall.desktop",
@@ -351,9 +368,9 @@ def check_makefile() -> None:
     for token in required:
         if token not in makefile:
             fail(f"Makefile is missing {token!r}")
-    for obsolete in ["install-gui", "install-all"]:
-        if re.search(rf"(?m)^{re.escape(obsolete)}\s*:", makefile):
-            fail(f"Makefile retains obsolete target {obsolete!r}")
+    for obsolete in ["cargo generate-lockfile", "Cargo.lock:", "install: install-gui install-cli"]:
+        if obsolete in makefile:
+            fail(f"Makefile retains obsolete lock or install logic {obsolete!r}")
 
 
 def check_package_hygiene() -> None:

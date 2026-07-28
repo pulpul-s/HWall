@@ -1,6 +1,5 @@
 .cargo
 .github
-Cargo.lock
 /target/
 *.swp
 *.swo

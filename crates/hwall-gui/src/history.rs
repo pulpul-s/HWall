@@ -268,15 +268,21 @@ impl HistoryStore {
             .count()
     }
 
+    pub(super) fn available_range(&self, key: &SensorKey) -> Option<(Instant, Duration)> {
+        let series = self.series.get(key)?;
+        let first = series.samples.front()?;
+        let last = series.samples.back()?;
+        Some((
+            last.captured_at,
+            last.captured_at
+                .saturating_duration_since(first.captured_at),
+        ))
+    }
+
     pub(super) fn available_duration(&self, key: &SensorKey) -> Duration {
-        let Some(series) = self.series.get(key) else {
-            return Duration::ZERO;
-        };
-        let (Some(first), Some(last)) = (series.samples.front(), series.samples.back()) else {
-            return Duration::ZERO;
-        };
-        last.captured_at
-            .saturating_duration_since(first.captured_at)
+        self.available_range(key)
+            .map(|(_, duration)| duration)
+            .unwrap_or_default()
     }
 
     pub(super) fn samples(
