@@ -63,7 +63,12 @@ sudo dnf install rust cargo gtk4-devel pkgconf-pkg-config
 
 ## Building
 
-Build the complete workspace:
+Build the complete workspace and install:
+```bash
+make install
+```
+
+Build the complete workspace without installing:
 
 ```bash
 cargo build --workspace --release
