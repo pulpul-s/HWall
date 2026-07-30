@@ -60,7 +60,7 @@ e4805c9cf9c810e489bc3412188a34729892b446e743b13b49250b088fa26b75  crates/hwall-g
 aff16bdf4a55f4afcd5d46524fc87037ae5ce7cb58de7c312ee72335c0630fcc  crates/hwall-gui/src/hardware.rs
 87237eea7d868aac99235fd0960634941ace00e027601b499998c4f853a12af9  crates/hwall-gui/src/history.rs
 a1abb4585fdfb52517f6f6f86d6f9babc87790a6644c82ef49a8983ee637be73  crates/hwall-gui/src/history_chart.rs
-4ec655ad67365d9da56c51f382d857dc935d9fbc042a95a8bf3ba0a7bcc6d413  crates/hwall-gui/src/main.rs
+6d9c99d3a0d6237d0e88321515ad9bc349ddee7a68af339ca78da4428b20c3c6  crates/hwall-gui/src/main.rs
 be2a35fb9af9dc634deafd6db249bf3493cc06ba0bbf7bc87c4521ceb3a94263  crates/hwall-gui/src/session.rs
 775ce03bd08be684be49aac497888084495f78889fccd7375927a988fef37c47  crates/hwall-gui/src/table.rs
 75d81e6243816ace2801d9908faab44b8b624a302c372c3491072b5e0b56e0f3  crates/hwall-gui/src/tray.rs
