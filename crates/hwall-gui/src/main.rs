@@ -110,11 +110,6 @@ fn build_ui(application: &Application) {
 
     if initial.start_hidden && model.borrow().tray.available {
         ui.window.hide();
-
-        let display = gtk::prelude::WidgetExt::display(&ui.window);
-        if let Some(startup_id) = display.startup_notification_id() {
-            display.notify_startup_complete(startup_id.as_str());
-        }
     } else {
         ui.window.present();
     }

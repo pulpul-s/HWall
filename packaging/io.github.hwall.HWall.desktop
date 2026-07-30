@@ -7,5 +7,5 @@ Icon=io.github.hwall.HWall
 Terminal=false
 Categories=System;Monitor;
 Keywords=hardware;inventory;sensors;temperature;voltage;fan;monitor;
-StartupNotify=true
+StartupNotify=false
 StartupWMClass=io.github.hwall.HWall
