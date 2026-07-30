@@ -1,5 +1,6 @@
 use hwall_app::{
-    DEFAULT_HISTORY_RETENTION_SECONDS, MAX_HISTORY_RETENTION_SECONDS, MIN_HISTORY_RETENTION_SECONDS,
+    DEFAULT_HISTORY_RETENTION_SECONDS, MAX_HISTORY_RETENTION_SECONDS,
+    MIN_HISTORY_RETENTION_SECONDS, MIN_REFRESH_INTERVAL_MS,
 };
 use hwall_core::{Sensor, SensorStatus, Snapshot, Unit};
 use std::cell::RefCell;
@@ -13,8 +14,6 @@ pub(super) const DEFAULT_HISTORY_RETENTION: Duration =
     Duration::from_secs(DEFAULT_HISTORY_RETENTION_SECONDS);
 pub(super) const MAX_HISTORY_RETENTION: Duration =
     Duration::from_secs(MAX_HISTORY_RETENTION_SECONDS);
-const MIN_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
-const MIN_CONNECTED_GAP: Duration = Duration::from_millis(2_500);
 
 pub(super) type SharedHistory = Rc<RefCell<HistoryStore>>;
 
@@ -37,6 +36,7 @@ impl SensorKey {
 struct TimedSample {
     captured_at: Instant,
     timestamp_ms: u128,
+    expected_interval: Duration,
     value: Option<f64>,
     status: RecordedStatus,
 }
@@ -84,24 +84,6 @@ impl SeriesHistory {
             .unwrap_or(global_retention)
     }
 
-    fn push(&mut self, sample: TimedSample) {
-        let Some(last) = self.samples.back_mut() else {
-            self.samples.push_back(sample);
-            return;
-        };
-        if sample
-            .captured_at
-            .saturating_duration_since(last.captured_at)
-            < MIN_SAMPLE_PERIOD
-        {
-            last.timestamp_ms = sample.timestamp_ms;
-            last.value = sample.value;
-            last.status = sample.status;
-            return;
-        }
-        self.samples.push_back(sample);
-    }
-
     fn prune(&mut self, now: Instant, global_retention: Duration) {
         let cutoff = now
             .checked_sub(self.retention(global_retention))
@@ -122,6 +104,14 @@ pub(super) struct ChartPoint {
     pub(super) value: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct HistoryPoint {
+    pub(super) captured_at: Instant,
+    pub(super) timestamp_ms: u128,
+    pub(super) expected_interval: Duration,
+    pub(super) value: Option<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct HistorySample {
     pub(super) timestamp_ms: u128,
@@ -134,6 +124,7 @@ pub(super) struct HistoryStore {
     series: BTreeMap<SensorKey, SeriesHistory>,
     expected_interval: Duration,
     global_retention: Duration,
+    revision: u64,
 }
 
 impl Default for HistoryStore {
@@ -142,6 +133,7 @@ impl Default for HistoryStore {
             series: BTreeMap::new(),
             expected_interval: Duration::from_secs(1),
             global_retention: DEFAULT_HISTORY_RETENTION,
+            revision: 0,
         }
     }
 }
@@ -155,7 +147,11 @@ impl HistoryStore {
     }
 
     pub(super) fn set_expected_interval(&mut self, interval: Duration) {
-        self.expected_interval = interval.max(Duration::from_millis(100));
+        self.expected_interval = interval.max(Duration::from_millis(MIN_REFRESH_INTERVAL_MS));
+    }
+
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub(super) fn global_retention(&self) -> Duration {
@@ -173,6 +169,7 @@ impl HistoryStore {
             series.prune(now, global_retention);
         }
         self.series.retain(|_, series| !series.samples.is_empty());
+        self.bump_revision();
     }
 
     pub(super) fn observe(&mut self, snapshot: &Snapshot) {
@@ -180,19 +177,24 @@ impl HistoryStore {
     }
 
     fn observe_at(&mut self, snapshot: &Snapshot, now: Instant) {
+        let expected_interval = self.expected_interval;
         for device in &snapshot.devices {
             for sensor in &device.sensors {
                 if sensor.is_intermittent() || !chartable_unit(sensor.unit) {
                     continue;
                 }
                 let key = SensorKey::new(&device.id, &sensor.id);
-                let series = self.series.entry(key).or_default();
-                series.push(TimedSample {
-                    captured_at: now,
-                    timestamp_ms: snapshot.captured_at_unix_ms,
-                    value: sensor.value.filter(|value| value.is_finite()),
-                    status: recorded_status(sensor),
-                });
+                self.series
+                    .entry(key)
+                    .or_default()
+                    .samples
+                    .push_back(TimedSample {
+                        captured_at: now,
+                        timestamp_ms: snapshot.captured_at_unix_ms,
+                        expected_interval,
+                        value: sensor.value.filter(|value| value.is_finite()),
+                        status: recorded_status(sensor),
+                    });
             }
         }
 
@@ -201,6 +203,7 @@ impl HistoryStore {
             series.prune(now, global_retention);
         }
         self.series.retain(|_, series| !series.samples.is_empty());
+        self.bump_revision();
     }
 
     pub(super) fn reset_with(&mut self, snapshot: &Snapshot) {
@@ -225,6 +228,7 @@ impl HistoryStore {
             persistent,
         });
         series.prune(now, global_retention);
+        self.bump_revision();
     }
 
     pub(super) fn set_persistent(&mut self, key: &SensorKey, persistent: bool) {
@@ -244,6 +248,7 @@ impl HistoryStore {
             series.prune(Instant::now(), global_retention);
         }
         self.series.retain(|_, series| !series.samples.is_empty());
+        self.bump_revision();
     }
 
     pub(super) fn close_details(&mut self, key: &SensorKey) {
@@ -268,6 +273,10 @@ impl HistoryStore {
             .count()
     }
 
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub(super) fn available_range(&self, key: &SensorKey) -> Option<(Instant, Duration)> {
         let series = self.series.get(key)?;
         let first = series.samples.front()?;
@@ -283,6 +292,24 @@ impl HistoryStore {
         self.available_range(key)
             .map(|(_, duration)| duration)
             .unwrap_or_default()
+    }
+
+    pub(super) fn nearest_point(&self, key: &SensorKey, target: Instant) -> Option<HistoryPoint> {
+        let series = self.series.get(key)?;
+        let (first, second) = series.samples.as_slices();
+        [
+            nearest_sample(first, target),
+            nearest_sample(second, target),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by_key(|sample| instant_distance(sample.captured_at, target))
+        .map(|sample| HistoryPoint {
+            captured_at: sample.captured_at,
+            timestamp_ms: sample.timestamp_ms,
+            expected_interval: sample.expected_interval,
+            value: sample.value,
+        })
     }
 
     pub(super) fn samples(
@@ -322,21 +349,24 @@ impl HistoryStore {
         };
         let window = window.clamp(MIN_HISTORY_RETENTION, MAX_HISTORY_RETENTION);
         let cutoff = now.checked_sub(window).unwrap_or(now);
-        let max_connected_gap = self
-            .expected_interval
-            .saturating_mul(3)
-            .max(MIN_CONNECTED_GAP);
 
         let mut output = Vec::new();
         let mut segment = Vec::new();
-        let mut previous_at = None;
+        let mut previous: Option<TimedSample> = None;
         for sample in series
             .samples
             .iter()
             .filter(|sample| sample.captured_at >= cutoff)
         {
-            let discontinuity = previous_at.is_some_and(|previous| {
-                sample.captured_at.saturating_duration_since(previous) > max_connected_gap
+            let discontinuity = previous.is_some_and(|previous| {
+                let max_connected_gap = previous
+                    .expected_interval
+                    .max(sample.expected_interval)
+                    .saturating_mul(3);
+                sample
+                    .captured_at
+                    .saturating_duration_since(previous.captured_at)
+                    > max_connected_gap
             });
             if sample.value.is_none() || discontinuity {
                 append_segment(&mut output, &segment, cutoff, window, max_points);
@@ -354,10 +384,30 @@ impl HistoryStore {
                     value,
                 });
             }
-            previous_at = Some(sample.captured_at);
+            previous = Some(*sample);
         }
         append_segment(&mut output, &segment, cutoff, window, max_points);
         output
+    }
+}
+
+fn nearest_sample(samples: &[TimedSample], target: Instant) -> Option<TimedSample> {
+    let index = samples.partition_point(|sample| sample.captured_at < target);
+    [
+        index.checked_sub(1).and_then(|index| samples.get(index)),
+        samples.get(index),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|sample| instant_distance(sample.captured_at, target))
+    .copied()
+}
+
+fn instant_distance(left: Instant, right: Instant) -> Duration {
+    if left >= right {
+        left.duration_since(right)
+    } else {
+        right.duration_since(left)
     }
 }
 
@@ -525,16 +575,29 @@ mod tests {
     }
 
     #[test]
-    fn faster_refreshes_do_not_create_more_than_one_point_per_second() {
+    fn subsecond_refreshes_are_all_retained() {
         let start = Instant::now();
         let mut history = HistoryStore::default();
-        for milliseconds in [0, 100, 500, 999, 1_000] {
+        history.set_expected_interval(Duration::from_millis(200));
+        for milliseconds in [0, 200, 400, 600, 800, 1_000] {
+            let mut sample_snapshot = snapshot(Some(milliseconds as f64));
+            sample_snapshot.captured_at_unix_ms = milliseconds;
             history.observe_at(
-                &snapshot(Some(milliseconds as f64)),
-                start + Duration::from_millis(milliseconds),
+                &sample_snapshot,
+                start + Duration::from_millis(milliseconds as u64),
             );
         }
         let key = SensorKey::new("cpu:0", "usage");
+        assert_eq!(history.series[&key].samples.len(), 6);
+        assert_eq!(
+            history
+                .samples(&key, None, start + Duration::from_secs(1))
+                .into_iter()
+                .map(|sample| sample.timestamp_ms)
+                .collect::<Vec<_>>(),
+            vec![0, 200, 400, 600, 800, 1_000]
+        );
+
         let points = history.chart_points(
             &key,
             Duration::from_secs(60),
@@ -543,8 +606,85 @@ mod tests {
         );
         assert_eq!(
             points.iter().filter(|point| point.value.is_some()).count(),
-            2
+            6
         );
+    }
+
+    #[test]
+    fn chart_connects_samples_across_interval_changes() {
+        let start = Instant::now();
+        let mut history = HistoryStore::default();
+        for milliseconds in [0, 1_000, 2_000] {
+            history.observe_at(
+                &snapshot(Some(milliseconds as f64)),
+                start + Duration::from_millis(milliseconds),
+            );
+        }
+
+        history.set_expected_interval(Duration::from_millis(200));
+        for milliseconds in [2_200, 2_400] {
+            history.observe_at(
+                &snapshot(Some(milliseconds as f64)),
+                start + Duration::from_millis(milliseconds),
+            );
+        }
+
+        let key = SensorKey::new("cpu:0", "usage");
+        let points = history.chart_points(
+            &key,
+            Duration::from_secs(60),
+            start + Duration::from_millis(2_400),
+            100,
+        );
+        assert_eq!(
+            points.iter().filter(|point| point.value.is_some()).count(),
+            5
+        );
+        assert!(!points.iter().any(|point| point.value.is_none()));
+    }
+
+    #[test]
+    fn chart_still_breaks_genuine_gaps_after_interval_changes() {
+        let start = Instant::now();
+        let mut history = HistoryStore::default();
+        history.observe_at(&snapshot(Some(1.0)), start);
+        history.observe_at(&snapshot(Some(2.0)), start + Duration::from_secs(1));
+
+        history.set_expected_interval(Duration::from_millis(200));
+        history.observe_at(&snapshot(Some(3.0)), start + Duration::from_millis(1_200));
+        history.observe_at(&snapshot(Some(4.0)), start + Duration::from_millis(2_200));
+
+        let key = SensorKey::new("cpu:0", "usage");
+        let points = history.chart_points(
+            &key,
+            Duration::from_secs(60),
+            start + Duration::from_millis(2_200),
+            100,
+        );
+        assert_eq!(
+            points.iter().filter(|point| point.value.is_none()).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn nearest_point_selects_the_closest_recorded_sample() {
+        let start = Instant::now();
+        let mut history = HistoryStore::default();
+        for seconds in [0, 10, 20] {
+            history.observe_at(
+                &snapshot(Some(seconds as f64)),
+                start + Duration::from_secs(seconds),
+            );
+        }
+        let key = SensorKey::new("cpu:0", "usage");
+        let point = history
+            .nearest_point(&key, start + Duration::from_secs(14))
+            .expect("nearest point");
+
+        assert_eq!(point.captured_at, start + Duration::from_secs(10));
+        assert_eq!(point.expected_interval, Duration::from_secs(1));
+        assert_eq!(point.value, Some(10.0));
     }
 
     #[test]

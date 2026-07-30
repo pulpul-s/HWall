@@ -1,8 +1,11 @@
-use crate::history::{SensorKey, SharedHistory, MAX_HISTORY_RETENTION, MIN_HISTORY_RETENTION};
+use crate::history::{
+    HistoryPoint, SensorKey, SharedHistory, MAX_HISTORY_RETENTION, MIN_HISTORY_RETENTION,
+};
 use gtk::cairo;
 use gtk::prelude::*;
 use gtk::{
-    glib, Align, Button, CheckButton, ComboBoxText, DrawingArea, Label, Orientation, SpinButton,
+    glib, Align, Button, CheckButton, ComboBoxText, DrawingArea, EventControllerMotion,
+    EventControllerScroll, EventControllerScrollFlags, GestureDrag, Label, Orientation, SpinButton,
 };
 use hwall_app::{default_log_directory, timestamped_log_path, LogFileWriter, LogFormat, SensorRow};
 use hwall_core::render::format_value;
@@ -10,18 +13,91 @@ use hwall_core::Unit;
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const PLOT_LEFT: f64 = 68.0;
+const PLOT_RIGHT_MARGIN: f64 = 12.0;
+const PLOT_TOP: f64 = 12.0;
+const PLOT_BOTTOM_MARGIN: f64 = 30.0;
+const ZOOM_STEP: f64 = 1.25;
+const CHART_REFRESH_PERIOD: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy)]
 enum ViewRange {
     Fixed(Duration),
     AllAvailable,
+    Manual(ChartWindow),
 }
 
 #[derive(Clone, Copy)]
 struct ChartWindow {
     duration: Duration,
     end: Instant,
+}
+
+#[derive(Clone, Copy)]
+struct PlotArea {
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+}
+
+impl PlotArea {
+    fn from_size(width: f64, height: f64) -> Option<Self> {
+        (width >= 120.0 && height >= 100.0).then_some(Self {
+            left: PLOT_LEFT,
+            right: width - PLOT_RIGHT_MARGIN,
+            top: PLOT_TOP,
+            bottom: height - PLOT_BOTTOM_MARGIN,
+        })
+    }
+
+    fn width(self) -> f64 {
+        (self.right - self.left).max(1.0)
+    }
+
+    fn height(self) -> f64 {
+        (self.bottom - self.top).max(1.0)
+    }
+
+    fn ratio(self, x: f64, y: f64) -> Option<f64> {
+        if !(self.left..=self.right).contains(&x) || !(self.top..=self.bottom).contains(&y) {
+            return None;
+        }
+        Some(((x - self.left) / self.width()).clamp(0.0, 1.0))
+    }
+}
+
+impl ChartWindow {
+    fn start(self) -> Instant {
+        self.end.checked_sub(self.duration).unwrap_or(self.end)
+    }
+
+    fn contains(self, point: Instant) -> bool {
+        point >= self.start() && point <= self.end
+    }
+
+    fn clamped(self, available: Option<(Instant, Duration)>, now: Instant) -> Self {
+        let duration = self
+            .duration
+            .clamp(MIN_HISTORY_RETENTION, MAX_HISTORY_RETENTION);
+        let Some((latest, available_duration)) = available else {
+            return Self { duration, end: now };
+        };
+        if duration >= available_duration {
+            return Self {
+                duration,
+                end: latest,
+            };
+        }
+        let oldest = latest.checked_sub(available_duration).unwrap_or(latest);
+        let earliest_end = oldest.checked_add(duration).unwrap_or(latest);
+        Self {
+            duration,
+            end: self.end.clamp(earliest_end, latest),
+        }
+    }
 }
 
 impl ViewRange {
@@ -38,8 +114,73 @@ impl ViewRange {
                     end,
                 },
             ),
+            Self::Manual(window) => window.clamped(available, now),
         }
     }
+
+    fn end_label(self) -> &'static str {
+        match self {
+            Self::Fixed(_) => "now",
+            Self::AllAvailable => "latest",
+            Self::Manual(_) => "end",
+        }
+    }
+}
+
+fn zoomed_window(
+    window: ChartWindow,
+    available: Option<(Instant, Duration)>,
+    anchor: f64,
+    factor: f64,
+    now: Instant,
+) -> ChartWindow {
+    let anchor = anchor.clamp(0.0, 1.0);
+    let duration = scaled_duration(window.duration, factor);
+    let anchor_at = instant_at_ratio(window, anchor);
+    let tail = duration.mul_f64(1.0 - anchor);
+    let end = anchor_at.checked_add(tail).unwrap_or(anchor_at);
+    ChartWindow { duration, end }.clamped(available, now)
+}
+
+fn scaled_duration(duration: Duration, factor: f64) -> Duration {
+    let minutes = duration.as_secs_f64() / 60.0;
+    let scaled = minutes * factor;
+    let rounded = if factor >= 1.0 {
+        scaled.ceil()
+    } else {
+        scaled.floor()
+    };
+    let minimum = MIN_HISTORY_RETENTION.as_secs() / 60;
+    let maximum = MAX_HISTORY_RETENTION.as_secs() / 60;
+    Duration::from_secs((rounded as u64).clamp(minimum, maximum) * 60)
+}
+
+fn panned_window(
+    window: ChartWindow,
+    available: Option<(Instant, Duration)>,
+    offset_fraction: f64,
+    now: Instant,
+) -> ChartWindow {
+    let offset = window
+        .duration
+        .mul_f64(offset_fraction.abs().clamp(0.0, 10.0));
+    let end = if offset_fraction >= 0.0 {
+        window.end.checked_sub(offset).unwrap_or(window.start())
+    } else {
+        window.end.checked_add(offset).unwrap_or(window.end)
+    };
+    ChartWindow {
+        duration: window.duration,
+        end,
+    }
+    .clamped(available, now)
+}
+
+fn instant_at_ratio(window: ChartWindow, ratio: f64) -> Instant {
+    window
+        .start()
+        .checked_add(window.duration.mul_f64(ratio.clamp(0.0, 1.0)))
+        .unwrap_or(window.end)
 }
 
 pub(super) fn panel(
@@ -66,10 +207,27 @@ pub(super) fn panel(
     }
 
     let view_range = Rc::new(Cell::new(ViewRange::Fixed(global_retention)));
+    let hover_ratio = Rc::new(Cell::new(None));
+    let hover_point = Rc::new(Cell::new(None));
     let root = gtk::Box::new(Orientation::Vertical, 8);
     root.set_margin_start(12);
     root.set_margin_end(12);
     root.set_margin_bottom(10);
+
+    let chart_header = gtk::Box::new(Orientation::Horizontal, 12);
+    let range_label = Label::new(None);
+    range_label.set_hexpand(true);
+    range_label.set_xalign(0.0);
+    range_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    range_label.add_css_class("dim-label");
+    chart_header.append(&range_label);
+
+    let hover_label = Label::new(None);
+    hover_label.set_xalign(1.0);
+    hover_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    hover_label.add_css_class("dim-label");
+    chart_header.append(&hover_label);
+    root.append(&chart_header);
 
     let chart = DrawingArea::builder()
         .content_width(600)
@@ -78,25 +236,36 @@ pub(super) fn panel(
         .vexpand(false)
         .build();
     chart.add_css_class("history-chart");
-    install_draw_func(
-        &chart,
-        Rc::clone(&history),
-        key.clone(),
-        Rc::clone(&view_range),
-        unit,
-    );
     root.append(&chart);
 
     let view_row = gtk::Box::new(Orientation::Horizontal, 10);
     view_row.set_halign(Align::Fill);
     let chart_for_view = chart.clone();
+    let history_for_view = Rc::clone(&history);
+    let key_for_view = key.clone();
     let view_range_for_change = Rc::clone(&view_range);
+    let hover_ratio_for_view = Rc::clone(&hover_ratio);
+    let hover_point_for_view = Rc::clone(&hover_point);
+    let range_label_for_view = range_label.clone();
+    let hover_label_for_view = hover_label.clone();
     let view = DurationSelector::new(
         "View",
         global_retention,
         MAX_HISTORY_RETENTION,
         move |duration| {
-            view_range_for_change.set(ViewRange::Fixed(duration));
+            let range = ViewRange::Fixed(duration);
+            view_range_for_change.set(range);
+            clear_hover(
+                &hover_ratio_for_view,
+                &hover_point_for_view,
+                &hover_label_for_view,
+            );
+            update_range_label(
+                &range_label_for_view,
+                &history_for_view,
+                &key_for_view,
+                range,
+            );
             chart_for_view.queue_draw();
         },
     );
@@ -107,6 +276,10 @@ pub(super) fn panel(
     let key_for_all = key.clone();
     let view_for_all = view.clone();
     let view_range_for_all = Rc::clone(&view_range);
+    let hover_ratio_for_all = Rc::clone(&hover_ratio);
+    let hover_point_for_all = Rc::clone(&hover_point);
+    let range_label_for_all = range_label.clone();
+    let hover_label_for_all = hover_label.clone();
     let chart_for_all = chart.clone();
     all.connect_clicked(move |_| {
         let window = ViewRange::AllAvailable.window(
@@ -115,10 +288,43 @@ pub(super) fn panel(
         );
         view_range_for_all.set(ViewRange::AllAvailable);
         view_for_all.set_display_duration(window.duration);
+        clear_hover(
+            &hover_ratio_for_all,
+            &hover_point_for_all,
+            &hover_label_for_all,
+        );
+        update_range_label(
+            &range_label_for_all,
+            &history_for_all,
+            &key_for_all,
+            ViewRange::AllAvailable,
+        );
         chart_for_all.queue_draw();
     });
     view_row.append(&all);
     root.append(&view_row);
+
+    install_draw_func(
+        &chart,
+        Rc::clone(&history),
+        key.clone(),
+        Rc::clone(&view_range),
+        Rc::clone(&hover_point),
+        unit,
+    );
+    let interaction = InteractionState {
+        history: Rc::clone(&history),
+        key: key.clone(),
+        view_range: Rc::clone(&view_range),
+        hover_ratio: Rc::clone(&hover_ratio),
+        hover_point: Rc::clone(&hover_point),
+        range_label: range_label.clone(),
+        hover_label: hover_label.clone(),
+        view: view.clone(),
+        unit,
+    };
+    install_interactions(&chart, interaction.clone());
+    update_range_label(&range_label, &history, &key, view_range.get());
 
     let recording_row = gtk::Box::new(Orientation::Horizontal, 10);
     let recording = CheckButton::with_label("Extended recording");
@@ -251,12 +457,20 @@ pub(super) fn panel(
     let weak_chart = chart.downgrade();
     let history_for_tick = Rc::clone(&history);
     let view_range_for_tick = Rc::clone(&view_range);
+    let interaction_for_tick = interaction;
     let view_for_tick = view.clone();
     let key_for_tick = key;
-    glib::timeout_add_local(Duration::from_millis(500), move || {
+    let mut last_revision = history_for_tick.borrow().revision();
+    glib::timeout_add_local(CHART_REFRESH_PERIOD, move || {
         let Some(chart) = weak_chart.upgrade() else {
             return glib::ControlFlow::Break;
         };
+        let revision = history_for_tick.borrow().revision();
+        if revision == last_revision {
+            return glib::ControlFlow::Continue;
+        }
+        last_revision = revision;
+
         if matches!(view_range_for_tick.get(), ViewRange::AllAvailable) {
             let window = ViewRange::AllAvailable.window(
                 history_for_tick.borrow().available_range(&key_for_tick),
@@ -264,6 +478,8 @@ pub(super) fn panel(
             );
             view_for_tick.set_display_duration(window.duration);
         }
+        refresh_range_label(&interaction_for_tick);
+        refresh_hover_state(&interaction_for_tick);
         update_available_label(&available, &history_for_tick, &key_for_tick);
         chart.queue_draw();
         glib::ControlFlow::Continue
@@ -298,6 +514,255 @@ fn export_samples(
 fn update_available_label(label: &Label, history: &SharedHistory, key: &SensorKey) {
     let duration = history.borrow().available_duration(key);
     label.set_text(&format!("Available: {}", duration_label(duration)));
+}
+
+#[derive(Clone)]
+struct InteractionState {
+    history: SharedHistory,
+    key: SensorKey,
+    view_range: Rc<Cell<ViewRange>>,
+    hover_ratio: Rc<Cell<Option<f64>>>,
+    hover_point: Rc<Cell<Option<HistoryPoint>>>,
+    range_label: Label,
+    hover_label: Label,
+    view: DurationSelector,
+    unit: Unit,
+}
+
+fn install_interactions(chart: &DrawingArea, state: InteractionState) {
+    let motion = EventControllerMotion::new();
+    let weak_chart = chart.downgrade();
+    let state_for_enter = state.clone();
+    motion.connect_enter(move |_, x, y| {
+        let Some(chart) = weak_chart.upgrade() else {
+            return;
+        };
+        let ratio = PlotArea::from_size(f64::from(chart.width()), f64::from(chart.height()))
+            .and_then(|plot| plot.ratio(x, y));
+        state_for_enter.hover_ratio.set(ratio);
+        refresh_hover_state(&state_for_enter);
+        chart.queue_draw();
+    });
+
+    let weak_chart = chart.downgrade();
+    let state_for_motion = state.clone();
+    motion.connect_motion(move |_, x, y| {
+        let Some(chart) = weak_chart.upgrade() else {
+            return;
+        };
+        let ratio = PlotArea::from_size(f64::from(chart.width()), f64::from(chart.height()))
+            .and_then(|plot| plot.ratio(x, y));
+        state_for_motion.hover_ratio.set(ratio);
+        refresh_hover_state(&state_for_motion);
+        chart.queue_draw();
+    });
+
+    let weak_chart = chart.downgrade();
+    let state_for_leave = state.clone();
+    motion.connect_leave(move |_| {
+        clear_hover(
+            &state_for_leave.hover_ratio,
+            &state_for_leave.hover_point,
+            &state_for_leave.hover_label,
+        );
+        if let Some(chart) = weak_chart.upgrade() {
+            chart.queue_draw();
+        }
+    });
+    chart.add_controller(motion);
+
+    let scroll = EventControllerScroll::new(EventControllerScrollFlags::VERTICAL);
+    let weak_chart = chart.downgrade();
+    let state_for_scroll = state.clone();
+    scroll.connect_scroll(move |_, _dx, dy| {
+        if dy.abs() < f64::EPSILON {
+            return glib::Propagation::Proceed;
+        }
+        let Some(chart) = weak_chart.upgrade() else {
+            return glib::Propagation::Proceed;
+        };
+        let now = Instant::now();
+        let available = state_for_scroll
+            .history
+            .borrow()
+            .available_range(&state_for_scroll.key);
+        let Some(anchor) = state_for_scroll.hover_ratio.get() else {
+            return glib::Propagation::Proceed;
+        };
+        let current = state_for_scroll.view_range.get().window(available, now);
+        let factor = if dy > 0.0 {
+            ZOOM_STEP
+        } else {
+            ZOOM_STEP.recip()
+        };
+        let window = zoomed_window(current, available, anchor, factor, now);
+        state_for_scroll.view_range.set(ViewRange::Manual(window));
+        state_for_scroll.view.set_display_duration(window.duration);
+        refresh_range_label(&state_for_scroll);
+        refresh_hover_state(&state_for_scroll);
+        chart.queue_draw();
+        glib::Propagation::Stop
+    });
+    chart.add_controller(scroll);
+
+    let drag = GestureDrag::new();
+    drag.set_button(1);
+    let drag_origin = Rc::new(Cell::new(None));
+    let weak_chart = chart.downgrade();
+    let state_for_begin = state.clone();
+    let drag_origin_for_begin = Rc::clone(&drag_origin);
+    drag.connect_drag_begin(move |_, x, y| {
+        let Some(chart) = weak_chart.upgrade() else {
+            return;
+        };
+        let plot = PlotArea::from_size(f64::from(chart.width()), f64::from(chart.height()));
+        if plot.and_then(|plot| plot.ratio(x, y)).is_none() {
+            drag_origin_for_begin.set(None);
+            return;
+        }
+        let now = Instant::now();
+        let available = state_for_begin
+            .history
+            .borrow()
+            .available_range(&state_for_begin.key);
+        drag_origin_for_begin.set(Some(
+            state_for_begin.view_range.get().window(available, now),
+        ));
+        clear_hover(
+            &state_for_begin.hover_ratio,
+            &state_for_begin.hover_point,
+            &state_for_begin.hover_label,
+        );
+        chart.queue_draw();
+    });
+
+    let weak_chart = chart.downgrade();
+    let state_for_update = state.clone();
+    let drag_origin_for_update = Rc::clone(&drag_origin);
+    drag.connect_drag_update(move |_, offset_x, _offset_y| {
+        let Some(origin) = drag_origin_for_update.get() else {
+            return;
+        };
+        let Some(chart) = weak_chart.upgrade() else {
+            return;
+        };
+        let Some(plot) = PlotArea::from_size(f64::from(chart.width()), f64::from(chart.height()))
+        else {
+            return;
+        };
+        let now = Instant::now();
+        let available = state_for_update
+            .history
+            .borrow()
+            .available_range(&state_for_update.key);
+        let window = panned_window(origin, available, offset_x / plot.width(), now);
+        state_for_update.view_range.set(ViewRange::Manual(window));
+        refresh_range_label(&state_for_update);
+        chart.queue_draw();
+    });
+
+    let drag_origin_for_end = drag_origin;
+    drag.connect_drag_end(move |_, _offset_x, _offset_y| {
+        drag_origin_for_end.set(None);
+    });
+    chart.add_controller(drag);
+}
+
+fn refresh_hover_state(state: &InteractionState) {
+    let Some(ratio) = state.hover_ratio.get() else {
+        state.hover_point.set(None);
+        state.hover_label.set_text("");
+        return;
+    };
+    let point = {
+        let history = state.history.borrow();
+        let window = state
+            .view_range
+            .get()
+            .window(history.available_range(&state.key), Instant::now());
+        history
+            .nearest_point(&state.key, instant_at_ratio(window, ratio))
+            .filter(|point| window.contains(point.captured_at))
+    };
+    state.hover_point.set(point);
+    let label = point.map(|point| hover_label(point, state.unit));
+    state.hover_label.set_text(label.as_deref().unwrap_or(""));
+}
+
+fn refresh_range_label(state: &InteractionState) {
+    update_range_label(
+        &state.range_label,
+        &state.history,
+        &state.key,
+        state.view_range.get(),
+    );
+}
+
+fn update_range_label(label: &Label, history: &SharedHistory, key: &SensorKey, range: ViewRange) {
+    let now = Instant::now();
+    let window = range.window(history.borrow().available_range(key), now);
+    label.set_text(&window_label(window, now, unix_timestamp_ms()));
+}
+
+fn clear_hover(
+    hover_ratio: &Rc<Cell<Option<f64>>>,
+    hover_point: &Rc<Cell<Option<HistoryPoint>>>,
+    label: &Label,
+) {
+    hover_ratio.set(None);
+    hover_point.set(None);
+    label.set_text("");
+}
+
+fn hover_label(point: HistoryPoint, unit: Unit) -> String {
+    let value = point
+        .value
+        .map(|value| format_value(value, &unit))
+        .unwrap_or_else(|| "Unavailable".to_owned());
+    let show_milliseconds = point.expected_interval < Duration::from_secs(1);
+    format!(
+        "{} — {value}",
+        timestamp_label(point.timestamp_ms, show_milliseconds)
+    )
+}
+
+fn timestamp_label(timestamp_ms: u128, show_milliseconds: bool) -> String {
+    let seconds = i64::try_from(timestamp_ms / 1_000).unwrap_or(i64::MAX);
+    glib::DateTime::from_unix_local(seconds)
+        .and_then(|date_time| date_time.format("%Y-%m-%d %H:%M:%S"))
+        .map(|formatted| {
+            if show_milliseconds {
+                format!("{formatted}.{:03}", timestamp_ms % 1_000)
+            } else {
+                formatted.to_string()
+            }
+        })
+        .unwrap_or_else(|_| format!("{timestamp_ms} ms since Unix epoch"))
+}
+
+fn window_label(window: ChartWindow, now: Instant, now_timestamp_ms: u128) -> String {
+    let start = timestamp_ms_at(window.start(), now, now_timestamp_ms);
+    let end = timestamp_ms_at(window.end, now, now_timestamp_ms);
+    format!(
+        "{} — {}",
+        timestamp_label(start, false),
+        timestamp_label(end, false)
+    )
+}
+
+fn timestamp_ms_at(target: Instant, now: Instant, now_timestamp_ms: u128) -> u128 {
+    if target <= now {
+        now_timestamp_ms.saturating_sub(now.duration_since(target).as_millis())
+    } else {
+        now_timestamp_ms.saturating_add(target.duration_since(now).as_millis())
+    }
+}
+
+fn unix_timestamp_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 #[derive(Clone)]
@@ -475,40 +940,38 @@ fn install_draw_func(
     history: SharedHistory,
     key: SensorKey,
     view_range: Rc<Cell<ViewRange>>,
+    hover_point: Rc<Cell<Option<HistoryPoint>>>,
     unit: Unit,
 ) {
     chart.set_draw_func(move |_area, context, width, height| {
         let width = f64::from(width);
         let height = f64::from(height);
-        if width < 120.0 || height < 100.0 {
+        let Some(plot) = PlotArea::from_size(width, height) else {
             return;
-        }
-
-        let left = 68.0;
-        let right = width - 12.0;
-        let top = 12.0;
-        let bottom = height - 30.0;
-        let plot_width = (right - left).max(1.0);
-        let plot_height = (bottom - top).max(1.0);
+        };
+        let plot_width = plot.width();
+        let plot_height = plot.height();
 
         context.set_source_rgba(0.5, 0.5, 0.5, 0.20);
         context.set_line_width(1.0);
         for index in 0..=4 {
-            let y = top + plot_height * f64::from(index) / 4.0;
-            context.move_to(left, y);
-            context.line_to(right, y);
+            let y = plot.top + plot_height * f64::from(index) / 4.0;
+            context.move_to(plot.left, y);
+            context.line_to(plot.right, y);
         }
         let _ = context.stroke();
 
         let max_points = plot_width.max(64.0) as usize;
         let now = Instant::now();
         let history = history.borrow();
-        let window = view_range.get().window(history.available_range(&key), now);
+        let range = view_range.get();
+        let window = range.window(history.available_range(&key), now);
         let points = history.chart_points(&key, window.duration, window.end, max_points);
         let mut values = points.iter().filter_map(|point| point.value);
         let Some(first) = values.next() else {
-            draw_empty(context, left, top + plot_height / 2.0);
-            draw_time_labels(context, left, right, bottom, window.duration);
+            draw_empty(context, plot.left, plot.top + plot_height / 2.0);
+            draw_hover(context, plot, window, hover_point.get(), None);
+            draw_time_labels(context, plot, window.duration, range.end_label());
             return;
         };
         let (mut minimum, mut maximum) = values.fold((first, first), |bounds, value| {
@@ -535,8 +998,8 @@ fn install_draw_func(
                 }
                 continue;
             };
-            let x = left + point.x * plot_width;
-            let y = bottom - (value - minimum) / (maximum - minimum) * plot_height;
+            let x = plot.left + point.x * plot_width;
+            let y = plot.bottom - (value - minimum) / (maximum - minimum) * plot_height;
             if active_path {
                 context.line_to(x, y);
             } else {
@@ -548,9 +1011,48 @@ fn install_draw_func(
             let _ = context.stroke();
         }
 
-        draw_value_labels(context, top, bottom, minimum, maximum, unit);
-        draw_time_labels(context, left, right, bottom, window.duration);
+        draw_hover(
+            context,
+            plot,
+            window,
+            hover_point.get(),
+            Some((minimum, maximum)),
+        );
+        draw_value_labels(context, plot.top, plot.bottom, minimum, maximum, unit);
+        draw_time_labels(context, plot, window.duration, range.end_label());
     });
+}
+
+fn draw_hover(
+    context: &cairo::Context,
+    plot: PlotArea,
+    window: ChartWindow,
+    point: Option<HistoryPoint>,
+    bounds: Option<(f64, f64)>,
+) {
+    let Some(point) = point.filter(|point| window.contains(point.captured_at)) else {
+        return;
+    };
+    let ratio = point
+        .captured_at
+        .saturating_duration_since(window.start())
+        .as_secs_f64()
+        / window.duration.as_secs_f64();
+    let x = plot.left + ratio.clamp(0.0, 1.0) * plot.width();
+
+    context.set_source_rgba(0.5, 0.5, 0.5, 0.70);
+    context.set_line_width(1.0);
+    context.move_to(x, plot.top);
+    context.line_to(x, plot.bottom);
+    let _ = context.stroke();
+
+    let (Some(value), Some((minimum, maximum))) = (point.value, bounds) else {
+        return;
+    };
+    let y = plot.bottom - (value - minimum) / (maximum - minimum) * plot.height();
+    context.set_source_rgba(0.20, 0.52, 0.88, 1.0);
+    context.arc(x, y, 3.5, 0.0, std::f64::consts::TAU);
+    let _ = context.fill();
 }
 
 fn draw_empty(context: &cairo::Context, x: f64, y: f64) {
@@ -576,19 +1078,13 @@ fn draw_value_labels(
     let _ = context.show_text(&format_value(minimum, &unit));
 }
 
-fn draw_time_labels(
-    context: &cairo::Context,
-    left: f64,
-    right: f64,
-    bottom: f64,
-    window: Duration,
-) {
+fn draw_time_labels(context: &cairo::Context, plot: PlotArea, window: Duration, end_label: &str) {
     context.set_source_rgba(0.5, 0.5, 0.5, 0.90);
     context.set_font_size(11.0);
-    context.move_to(left, bottom + 18.0);
+    context.move_to(plot.left, plot.bottom + 18.0);
     let _ = context.show_text(&format!("−{}", duration_label(window)));
-    context.move_to(right - 24.0, bottom + 18.0);
-    let _ = context.show_text("now");
+    context.move_to(plot.right - 40.0, plot.bottom + 18.0);
+    let _ = context.show_text(end_label);
 }
 
 fn duration_label(duration: Duration) -> String {
@@ -615,5 +1111,75 @@ mod tests {
 
         assert_eq!(window.duration, recorded);
         assert_eq!(window.end, latest);
+    }
+
+    #[test]
+    fn zoom_keeps_the_pointer_timestamp_stationary() {
+        let now = Instant::now();
+        let window = ChartWindow {
+            duration: Duration::from_secs(60 * 60),
+            end: now - Duration::from_secs(2 * 60 * 60),
+        };
+        let anchor = 0.5;
+        let anchored_at = instant_at_ratio(window, anchor);
+        let zoomed = zoomed_window(
+            window,
+            Some((now, Duration::from_secs(6 * 60 * 60))),
+            anchor,
+            ZOOM_STEP,
+            now,
+        );
+
+        assert_eq!(instant_at_ratio(zoomed, anchor), anchored_at);
+        assert_eq!(zoomed.duration, Duration::from_secs(75 * 60));
+    }
+
+    #[test]
+    fn timestamp_mapping_preserves_instant_offsets() {
+        let now = Instant::now();
+        let timestamp_ms = 10_000;
+
+        assert_eq!(
+            timestamp_ms_at(now - Duration::from_millis(1_500), now, timestamp_ms),
+            8_500
+        );
+        assert_eq!(
+            timestamp_ms_at(now + Duration::from_millis(250), now, timestamp_ms),
+            10_250
+        );
+    }
+
+    #[test]
+    fn hover_timestamp_precision_follows_the_sample_interval() {
+        let captured_at = Instant::now();
+        let subsecond = HistoryPoint {
+            captured_at,
+            timestamp_ms: 1_700_000_000_234,
+            expected_interval: Duration::from_millis(200),
+            value: Some(40.8),
+        };
+        let one_second = HistoryPoint {
+            expected_interval: Duration::from_secs(1),
+            ..subsecond
+        };
+
+        assert!(hover_label(subsecond, Unit::Celsius).contains(".234"));
+        assert!(!hover_label(one_second, Unit::Celsius).contains(".234"));
+    }
+
+    #[test]
+    fn panning_stays_inside_the_recorded_range() {
+        let now = Instant::now();
+        let available = Some((now, Duration::from_secs(4 * 60 * 60)));
+        let current = ChartWindow {
+            duration: Duration::from_secs(60 * 60),
+            end: now,
+        };
+
+        let oldest = panned_window(current, available, 10.0, now);
+        assert_eq!(oldest.end, now - Duration::from_secs(3 * 60 * 60));
+
+        let latest = panned_window(oldest, available, -10.0, now);
+        assert_eq!(latest.end, now);
     }
 }

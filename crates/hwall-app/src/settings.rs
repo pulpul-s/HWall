@@ -6,6 +6,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub const MIN_REFRESH_INTERVAL_MS: u64 = 200;
 pub const MIN_HISTORY_RETENTION_SECONDS: u64 = 60;
 pub const MAX_HISTORY_RETENTION_SECONDS: u64 = 24 * 60 * 60;
 pub const DEFAULT_HISTORY_RETENTION_SECONDS: u64 = MIN_HISTORY_RETENTION_SECONDS;
@@ -128,6 +129,10 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    pub fn refresh_interval(&self) -> Duration {
+        Duration::from_millis(self.interval_ms.max(MIN_REFRESH_INTERVAL_MS))
+    }
+
     pub fn history_retention(&self) -> Duration {
         Duration::from_secs(
             self.history_retention_seconds
@@ -197,6 +202,19 @@ mod tests {
             .find(|column| column.id == "status")
             .expect("status column");
         assert!(!status.visible);
+    }
+
+    #[test]
+    fn refresh_interval_respects_the_supported_minimum() {
+        let settings = AppSettings {
+            interval_ms: 100,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            settings.refresh_interval(),
+            Duration::from_millis(MIN_REFRESH_INTERVAL_MS)
+        );
     }
 
     #[test]

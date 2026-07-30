@@ -1,5 +1,5 @@
 use crate::history::{HistoryStore, SharedHistory};
-use hwall_app::{LogWorker, SensorRow};
+use hwall_app::{LogWorker, SensorRow, MIN_REFRESH_INTERVAL_MS};
 use hwall_core::{
     CollectOptions, CollectionProfile, MonitorCollector, MonitorPoll, MonitorRequestResult,
     MonitorWorker, Snapshot, SnapshotStatistics,
@@ -49,6 +49,17 @@ struct PendingHealthRefresh {
     reason: HealthRefreshReason,
 }
 
+fn normalize_refresh_interval(interval: Duration) -> Duration {
+    interval.max(Duration::from_millis(MIN_REFRESH_INTERVAL_MS))
+}
+
+fn advance_refresh_deadline(mut deadline: Instant, now: Instant, interval: Duration) -> Instant {
+    while deadline <= now {
+        deadline += interval;
+    }
+    deadline
+}
+
 pub(super) struct Session {
     initialization: Option<Receiver<MonitorCollector>>,
     worker: Option<MonitorWorker>,
@@ -79,6 +90,7 @@ impl Session {
         include_sensitive: bool,
         history_retention: Duration,
     ) -> Self {
+        let interval = normalize_refresh_interval(interval);
         let (tx, rx) = mpsc::channel();
         let initialization = thread::Builder::new()
             .name("hwall-initial-discovery".to_owned())
@@ -248,7 +260,7 @@ impl Session {
             MonitorRequestResult::Accepted => {
                 self.refresh_in_flight = true;
                 self.force_rediscovery = false;
-                self.next_refresh = now + self.interval;
+                self.next_refresh = advance_refresh_deadline(self.next_refresh, now, self.interval);
             }
             MonitorRequestResult::Busy => {}
             MonitorRequestResult::Disconnected => self.disconnected = true,
@@ -370,6 +382,7 @@ impl Session {
     }
 
     pub(super) fn set_interval(&mut self, interval: Duration) {
+        let interval = normalize_refresh_interval(interval);
         self.interval = interval;
         self.history.borrow_mut().set_expected_interval(interval);
         self.next_refresh = Instant::now() + interval;
@@ -424,5 +437,36 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.stop_logging();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_deadline_keeps_its_original_phase() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(1);
+        let next = advance_refresh_deadline(
+            start + interval,
+            start + interval + Duration::from_millis(75),
+            interval,
+        );
+
+        assert_eq!(next, start + Duration::from_secs(2));
+    }
+
+    #[test]
+    fn refresh_deadline_skips_missed_slots() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(200);
+        let next = advance_refresh_deadline(
+            start + interval,
+            start + Duration::from_millis(875),
+            interval,
+        );
+
+        assert_eq!(next, start + Duration::from_millis(1_000));
     }
 }

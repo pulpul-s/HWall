@@ -3,7 +3,7 @@ mod tui;
 mod watch;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use hwall_app::{render_terminal_view, TerminalView};
+use hwall_app::{render_terminal_view, TerminalView, MIN_REFRESH_INTERVAL_MS};
 use hwall_core::render;
 use hwall_core::{
     collect_snapshot, CollectOptions, CollectionProfile, MonitorCollector, SnapshotStatistics,
@@ -60,7 +60,7 @@ enum Command {
 
 #[derive(Debug, Clone, Args)]
 struct WatchArgs {
-    /// Refresh interval, for example 500ms, 1s, or 2m. Minimum: 100ms.
+    /// Refresh interval, for example 500ms, 1s, or 2m. Minimum: 200ms.
     #[arg(short, long, default_value = "1s", value_parser = parse_duration)]
     interval: Duration,
 
@@ -211,8 +211,8 @@ pub(crate) fn parse_duration(value: &str) -> Result<Duration, String> {
         return Err("duration must be a positive finite value".to_owned());
     }
     let duration = Duration::from_secs_f64(seconds);
-    if duration < Duration::from_millis(100) {
-        return Err("minimum interval is 100ms".to_owned());
+    if duration < Duration::from_millis(MIN_REFRESH_INTERVAL_MS) {
+        return Err(format!("minimum interval is {MIN_REFRESH_INTERVAL_MS}ms"));
     }
     Ok(duration)
 }
@@ -226,7 +226,8 @@ mod tests {
         assert_eq!(parse_duration("500ms").unwrap(), Duration::from_millis(500));
         assert_eq!(parse_duration("2s").unwrap(), Duration::from_secs(2));
         assert_eq!(parse_duration("1m").unwrap(), Duration::from_secs(60));
-        assert!(parse_duration("50ms").is_err());
+        assert!(parse_duration("100ms").is_err());
+        assert_eq!(parse_duration("200ms").unwrap(), Duration::from_millis(200));
     }
 
     #[test]

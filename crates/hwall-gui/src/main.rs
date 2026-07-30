@@ -71,7 +71,7 @@ fn activate(application: &Application) {
 fn build_ui(application: &Application) {
     let settings_store = SettingsStore::discover();
     let initial = settings_store.load();
-    let interval = Duration::from_millis(initial.interval_ms.max(100));
+    let interval = initial.refresh_interval();
     let rediscover = Duration::from_secs(initial.rediscover_seconds.max(5));
     let health_interval = Duration::from_secs(initial.health_interval_seconds.max(60));
     let session = Session::spawn(
@@ -240,7 +240,7 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
             ui_for_settings.table.clone(),
             plasma_placement_available,
             move |settings| {
-                let interval = Duration::from_millis(settings.interval_ms.max(100));
+                let interval = settings.refresh_interval();
                 let history_retention = settings.history_retention();
                 let density = settings.density;
                 let favorites_only = settings.favorites_only;

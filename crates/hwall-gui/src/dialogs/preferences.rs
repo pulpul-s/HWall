@@ -1,6 +1,7 @@
 use super::*;
 use crate::history::MAX_HISTORY_RETENTION;
 use crate::history_chart::DurationSelector;
+use hwall_app::MIN_REFRESH_INTERVAL_MS;
 
 pub(crate) fn show_sensor_alias(
     parent: &ApplicationWindow,
@@ -78,7 +79,7 @@ pub(crate) fn show_settings(
         .margin_start(14)
         .margin_end(14)
         .build();
-    let interval = gtk::SpinButton::with_range(100.0, 60_000.0, 100.0);
+    let interval = gtk::SpinButton::with_range(MIN_REFRESH_INTERVAL_MS as f64, 60_000.0, 100.0);
     interval.set_value(current.interval_ms as f64);
     interval.set_tooltip_text(Some("Hardware refresh interval in milliseconds"));
     attach_labeled(&grid, 0, "Refresh interval (ms)", &interval);
@@ -187,7 +188,8 @@ pub(crate) fn show_settings(
     dialog.connect_response(move |dialog, response| {
         if response == ResponseType::Apply {
             let mut updated = current.clone();
-            updated.interval_ms = interval.value().round().max(100.0) as u64;
+            updated.interval_ms =
+                interval.value().round().max(MIN_REFRESH_INTERVAL_MS as f64) as u64;
             updated.density = density
                 .active_id()
                 .as_deref()
