@@ -4,7 +4,7 @@
 //! including AMD physical-core counters. Each source fails independently.
 
 use super::perf_event::{PerfCounter, PerfEvent};
-use super::util::{list_dirs, read_trimmed, read_u64};
+use super::util::{canonical, list_dirs, read_trimmed, read_u64};
 use crate::model::{Device, DeviceClass, Identification, Sensor, SensorKind, Snapshot, Unit};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -225,8 +225,9 @@ struct Reading {
 }
 
 fn discover_powercap(root: &Path, specs: &mut BTreeMap<Domain, SourceSpec>) {
+    let mut visited = BTreeSet::new();
     for path in list_dirs(root) {
-        discover_powercap_tree(&path, None, specs);
+        discover_powercap_tree(&path, None, specs, &mut visited);
     }
 }
 
@@ -234,7 +235,14 @@ fn discover_powercap_tree(
     path: &Path,
     parent_package: Option<u32>,
     specs: &mut BTreeMap<Domain, SourceSpec>,
+    visited: &mut BTreeSet<PathBuf>,
 ) {
+    // Powercap zones expose `device` symlinks that can lead back into the
+    // same hierarchy. Use the resolved node as the traversal identity.
+    let identity = canonical(path).unwrap_or_else(|| path.to_path_buf());
+    if !visited.insert(identity) {
+        return;
+    }
     let name = read_trimmed(path.join("name"));
     let package = name
         .as_deref()
@@ -252,7 +260,7 @@ fn discover_powercap_tree(
     }
     for child in list_dirs(path) {
         if child.join("name").is_file() {
-            discover_powercap_tree(&child, Some(package), specs);
+            discover_powercap_tree(&child, Some(package), specs, visited);
         }
     }
 }
@@ -622,6 +630,42 @@ fn label(domain: Domain) -> String {
 mod tests {
     use super::*;
     use crate::model::PropertyValue;
+
+    #[cfg(unix)]
+    #[test]
+    fn powercap_discovery_does_not_follow_symlink_cycles() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "hwall-powercap-cycle-{}-{unique}",
+            std::process::id()
+        ));
+        let package = root.join("intel-rapl:0");
+        fs::create_dir_all(&package).expect("create powercap fixture");
+        fs::write(package.join("name"), "package-0\n").expect("write domain name");
+        fs::write(package.join("energy_uj"), "123\n").expect("write energy counter");
+        fs::write(package.join("max_energy_range_uj"), "1000\n").expect("write energy range");
+        symlink(".", package.join("device")).expect("create device symlink cycle");
+
+        let mut specs = BTreeMap::new();
+        let mut visited = BTreeSet::new();
+        discover_powercap_tree(&package, None, &mut specs, &mut visited);
+
+        assert_eq!(visited.len(), 1);
+        assert_eq!(specs.len(), 1);
+        let Some(SourceSpec::Powercap { maximum, .. }) = specs.get(&Domain::Package(0)) else {
+            panic!("package power source was not discovered");
+        };
+        assert_eq!(*maximum, Some(1_000));
+
+        fs::remove_dir_all(root).expect("remove powercap fixture");
+    }
 
     #[test]
     fn parses_cpu_lists() {
