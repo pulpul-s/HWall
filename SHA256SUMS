@@ -68,9 +68,6 @@ be2a35fb9af9dc634deafd6db249bf3493cc06ba0bbf7bc87c4521ceb3a94263  crates/hwall-g
 75d81e6243816ace2801d9908faab44b8b624a302c372c3491072b5e0b56e0f3  crates/hwall-gui/src/tray.rs
 68c40857301a160351c9dcb5b0eaea9e01c0112501bc66c8306cb7a45f366b1f  crates/hwall-gui/src/ui.rs
 0435cbcde26093568879562d24cd2c617cc031f2c540d5834132f9827ad2a166  crates/hwall-gui/src/window.rs
-ad944e7f6b66851b84fca274795cbb1fc9fae7bdf799f1f71d128b6157bdb01d  dist/arch/hwall-1.0.1-1-x86_64.pkg.tar.zst
-c8019fd4892fc6c7775feaaa028e94dc00f1fb60bcd50d835fc449faed5e528b  dist/deb/hwall_1.0.1-1_amd64_debian12.deb
-6cc3e95feaf9bb0f28ffd62479c5e20d3526fddf8bfe0b0ef6daca785d5e1e60  dist/rpm/hwall-1.0.1-1.x86_64.rpm
 4abf6c4cc941d2a4ce5e979fbe486d15e56958dcc9138ec05a08e25f35374610  packaging/arch/PKGBUILD.in
 628927b4f6a4e4a753f74d862d48274a9813559ad9a693f54b79ba8125de9bad  packaging/icons/hicolor/32x32/apps/io.github.hwall.HWall.png
 7257c8f35d75992da24ae5707a6a080edbd735fc51f8841453e527eaf608a8c4  packaging/icons/hicolor/48x48/apps/io.github.hwall.HWall.png
