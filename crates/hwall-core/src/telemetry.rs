@@ -62,12 +62,9 @@ impl TelemetryDeriver {
 }
 
 fn derive_cpu(device: &mut Device, previous: &BTreeMap<String, u64>) {
-    if let Some(utilization) = cpu_utilization(
-        device,
-        previous,
-        "cpu_total_ticks",
-        "cpu_idle_ticks",
-    ) {
+    if let Some(utilization) =
+        cpu_utilization(device, previous, "cpu_total_ticks", "cpu_idle_ticks")
+    {
         push_derived_sensor(
             device,
             "cpu:0:utilization:total",
@@ -121,9 +118,7 @@ fn cpu_utilization(
     if total_delta == 0 || idle_delta > total_delta {
         return None;
     }
-    Some(
-        ((total_delta - idle_delta) as f64 * 100.0 / total_delta as f64).clamp(0.0, 100.0),
-    )
+    Some(((total_delta - idle_delta) as f64 * 100.0 / total_delta as f64).clamp(0.0, 100.0))
 }
 
 fn derive_network(device: &mut Device, previous: &BTreeMap<String, u64>, seconds: f64) {
@@ -487,14 +482,8 @@ mod tests {
                 .and_then(|sensor| sensor.value)
         };
         assert_eq!(sensor_value("cpu:0:utilization:total"), Some(50.0));
-        assert_eq!(
-            sensor_value("cpu:0:utilization:logical:0"),
-            Some(50.0)
-        );
-        assert_eq!(
-            sensor_value("cpu:0:utilization:logical:1"),
-            Some(90.0)
-        );
+        assert_eq!(sensor_value("cpu:0:utilization:logical:0"), Some(50.0));
+        assert_eq!(sensor_value("cpu:0:utilization:logical:1"), Some(90.0));
     }
 
     #[test]

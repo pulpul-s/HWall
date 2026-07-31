@@ -17,11 +17,24 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 - Optional SMART and NVMe health information
 - Human-readable reports, filtered sensor output, JSON export, JSON Lines streaming, and an interactive terminal monitor
 
+## Hardware support
+
 Hardware support depends on the interfaces exposed by the running kernel and the installed drivers. Missing readings are omitted rather than guessed.
 
 ### Motherboard sensor drivers
 
 Motherboard voltages, fan speeds, and board temperatures are available only when the appropriate Linux hwmon driver is loaded. HWall reads sensors already exposed under `/sys/class/hwmon`; it does not load kernel modules or request administrator privileges.
+
+| Module | Typical hardware | Common readings |
+|---|---|---|
+| `nct6775` | Modern Nuvoton Super-I/O chips | Voltages, temperatures, fan RPM, PWM |
+| `it87` | ITE Super-I/O chips | Voltages, temperatures, fan RPM, PWM |
+| `asus-ec-sensors` | Supported ASUS motherboards | Board, chipset and VRM temperatures, extra fans, some voltage/current readings |
+| `asus_wmi_sensors` | Older supported ASUS boards | Voltages, temperatures, fans, current and water-cooling headers |
+| `w83627ehf` | Older Winbond/Nuvoton chips | Voltages, temperatures and fans |
+| `f71882fg` | Fintek Super-I/O chips | Voltages, temperatures and fans |
+
+Available channels depend on the motherboard, monitoring chip, driver, and kernel version.
 
 For example, many Nuvoton monitoring chips use the `nct6775` driver. Load a known driver for the current boot with:
 
@@ -29,22 +42,23 @@ For example, many Nuvoton monitoring chips use the `nct6775` driver. Load a know
 sudo modprobe nct6775
 ```
 
-To load it automatically during future boots:
+### CPU power monitoring
+
+On supported processors, HWall can derive CPU package, aggregate core-domain, per-core, DRAM, integrated GPU, and platform power from Linux powercap or perf energy counters.
+
+On many modern Linux systems, perf energy counters are restricted to administrators by default. HWall checks each domain independently and omits readings it cannot access.
+
+To allow ordinary users to access system-wide perf energy counters for the current boot:
 
 ```bash
-echo nct6775 | sudo tee /etc/modules-load.d/hwall-hwmon.conf
+sudo sysctl kernel.perf_event_paranoid=0
 ```
 
-Replace `nct6775` with the driver appropriate for the motherboard. Other common examples include `it87`, `asus-ec-sensors`, and `asus_wmi_sensors`; board-specific driver support may depend on the kernel version. The `sensors` command from `lm-sensors` can be used to verify that readings are available before starting HWall.
+This permits local users to perform system-wide performance monitoring. Review the Linux kernel [`perf_event_paranoid` sysctl guide](https://docs.kernel.org/admin-guide/sysctl/kernel.html#perf-event-paranoid) and enable it only when that access is acceptable.
 
-## Requirements
+CPU package power represents the overall processor-package domain. CPU cores power represents only the execution-core domain and must not be added to package power. Per-core power is shown only when the processor and kernel provide physical-core energy counters.
 
-- Rust 1.92 or newer
-- GTK 4.8 or newer development files for the graphical application
-- `pkg-config`
-- A standard C build toolchain
-
-### Runtime helpers
+### Optional runtime helpers
 
 HWall can operate from Linux kernel interfaces alone, but installing the applicable runtime helpers is strongly recommended. Some hardware information and telemetry are unavailable without the helper that provides them. HWall detects available helpers automatically and skips integrations that are unavailable.
 
@@ -60,7 +74,14 @@ HWall can operate from Linux kernel interfaces alone, but installing the applica
 
 For the most complete output, install the helpers relevant to the hardware in the system. Missing helpers do not prevent HWall from starting; only the affected information is omitted.
 
-### Example build dependencies:
+## Requirements
+
+- Rust 1.92 or newer
+- GTK 4.8 or newer development files for the graphical application
+- `pkg-config`
+- A standard C build toolchain
+
+### Example build dependencies
 
 **Arch Linux**
 
@@ -75,6 +96,7 @@ sudo apt install cargo rustc libgtk-4-dev pkg-config build-essential
 ```
 
 **Fedora**
+
 ```bash
 sudo dnf install rust cargo gtk4-devel pkgconf-pkg-config
 ```
@@ -82,15 +104,10 @@ sudo dnf install rust cargo gtk4-devel pkgconf-pkg-config
 
 ## Building
 
-Build the complete workspace and install:
-```bash
-make install
-```
-
-Build the complete workspace without installing:
+Build the complete workspace:
 
 ```bash
-cargo build --locked --workspace --release
+make release
 ```
 
 The binaries are written to:
@@ -100,16 +117,22 @@ target/release/hwall
 target/release/hwall-cli
 ```
 
-Build only the command-line application without GTK dependencies:
+Build only the GUI:
 
 ```bash
-cargo build --locked -p hwall-cli --release
+make release-gui
 ```
 
 Build the GUI without tray integration:
 
 ```bash
 cargo build --locked -p hwall-gui --release --no-default-features
+```
+
+Build only the command-line application without GTK dependencies:
+
+```bash
+make release-cli
 ```
 
 ## Installing

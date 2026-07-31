@@ -1,6 +1,7 @@
 mod block;
 mod cpu;
 mod dmi;
+pub(crate) mod energy;
 mod gpu;
 mod hwmon;
 mod memory;
@@ -8,6 +9,7 @@ mod network;
 mod nvme;
 mod ownership;
 mod pci;
+mod perf_event;
 mod power;
 mod reconcile;
 mod storage_health;

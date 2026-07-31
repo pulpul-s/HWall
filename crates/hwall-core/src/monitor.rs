@@ -4,6 +4,7 @@
 //! worker thread. Terminal and GUI event loops can request one refresh at a
 //! time and consume completed snapshots without blocking input handling.
 
+use crate::collect::energy::EnergyCollector;
 use crate::collect::{
     collect_snapshot, collect_storage_health_targets, reconcile_snapshot, storage_health_target,
     CollectOptions, CollectionProfile,
@@ -24,6 +25,7 @@ pub struct MonitorCollector {
     last_discovery: Instant,
     last_health: Instant,
     telemetry: TelemetryDeriver,
+    energy: EnergyCollector,
 }
 
 impl MonitorCollector {
@@ -32,7 +34,9 @@ impl MonitorCollector {
         rediscover: Duration,
         health_interval: Duration,
     ) -> Self {
-        let raw_base = collect_snapshot(&full_options);
+        let mut energy = EnergyCollector::new();
+        let mut raw_base = collect_snapshot(&full_options);
+        energy.sample(&mut raw_base);
         let mut telemetry = TelemetryDeriver::default();
         let base = telemetry.apply(raw_base);
         let fast_options = CollectOptions {
@@ -50,6 +54,7 @@ impl MonitorCollector {
             last_discovery: Instant::now(),
             last_health: Instant::now(),
             telemetry,
+            energy,
         }
     }
 
@@ -63,7 +68,9 @@ impl MonitorCollector {
                 && (force_rediscovery || self.last_health.elapsed() >= self.health_interval);
             let mut rediscovery_options = self.full_options.clone();
             rediscovery_options.include_storage_health = refresh_health;
+            self.energy.refresh_sources();
             let mut refreshed = collect_snapshot(&rediscovery_options);
+            self.energy.sample(&mut refreshed);
             merge_storage_health_cache(&self.base, &mut refreshed);
             if refresh_health {
                 self.last_health = Instant::now();
@@ -73,8 +80,10 @@ impl MonitorCollector {
             return self.base.clone();
         }
 
-        let dynamic = collect_snapshot(&self.fast_options);
+        let mut dynamic = collect_snapshot(&self.fast_options);
+        self.energy.sample(&mut dynamic);
         let mut static_base = self.base.clone();
+        EnergyCollector::clear_sensors(&mut static_base);
         for device in &mut static_base.devices {
             device.counters.clear();
         }

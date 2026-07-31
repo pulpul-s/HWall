@@ -472,22 +472,10 @@ mod tests {
 
         assert_eq!(device.counters.get("cpu_total_ticks"), Some(&344));
         assert_eq!(device.counters.get("cpu_idle_ticks"), Some(&210));
-        assert_eq!(
-            device.counters.get("cpu_logical_0_total_ticks"),
-            Some(&171)
-        );
-        assert_eq!(
-            device.counters.get("cpu_logical_0_idle_ticks"),
-            Some(&105)
-        );
-        assert_eq!(
-            device.counters.get("cpu_logical_1_total_ticks"),
-            Some(&173)
-        );
-        assert_eq!(
-            device.counters.get("cpu_logical_1_idle_ticks"),
-            Some(&105)
-        );
+        assert_eq!(device.counters.get("cpu_logical_0_total_ticks"), Some(&171));
+        assert_eq!(device.counters.get("cpu_logical_0_idle_ticks"), Some(&105));
+        assert_eq!(device.counters.get("cpu_logical_1_total_ticks"), Some(&173));
+        assert_eq!(device.counters.get("cpu_logical_1_idle_ticks"), Some(&105));
     }
 
     #[test]

@@ -648,10 +648,8 @@ pub fn natural_cmp(left: &str, right: &str) -> Ordering {
         if left_digit && right_digit {
             let left_end = digit_run_end(left, left_index);
             let right_end = digit_run_end(right, right_index);
-            let ordering = compare_digit_runs(
-                &left[left_index..left_end],
-                &right[right_index..right_end],
-            );
+            let ordering =
+                compare_digit_runs(&left[left_index..left_end], &right[right_index..right_end]);
             if ordering != Ordering::Equal {
                 return ordering;
             }

@@ -356,9 +356,11 @@ impl HistoryStore {
         let mut output = Vec::new();
         let mut segment = Vec::new();
         let mut previous: Option<TimedSample> = None;
-        for sample in series.samples.iter().filter(|sample| {
-            sample.captured_at >= cutoff && sample.captured_at <= now
-        }) {
+        for sample in series
+            .samples
+            .iter()
+            .filter(|sample| sample.captured_at >= cutoff && sample.captured_at <= now)
+        {
             let discontinuity = previous.is_some_and(|previous| {
                 let max_connected_gap = previous
                     .expected_interval
@@ -436,8 +438,7 @@ fn largest_triangle_three_buckets(samples: &[TimedSample], threshold: usize) -> 
     for bucket in 0..threshold - 2 {
         let average_start =
             (((bucket + 1) as f64 * every).floor() as usize + 1).min(samples.len() - 1);
-        let average_end =
-            (((bucket + 2) as f64 * every).floor() as usize + 1).min(samples.len());
+        let average_end = (((bucket + 2) as f64 * every).floor() as usize + 1).min(samples.len());
         let average_range = &samples[average_start..average_end];
         let (average_x, average_y) = if average_range.is_empty() {
             sample_coordinates(samples[samples.len() - 1], samples[0].captured_at)
@@ -450,8 +451,7 @@ fn largest_triangle_three_buckets(samples: &[TimedSample], threshold: usize) -> 
             (x / count, y / count)
         };
 
-        let range_start =
-            ((bucket as f64 * every).floor() as usize + 1).min(samples.len() - 1);
+        let range_start = ((bucket as f64 * every).floor() as usize + 1).min(samples.len() - 1);
         let range_end = (((bucket + 1) as f64 * every).floor() as usize + 1)
             .min(samples.len() - 1)
             .max(range_start + 1);
@@ -744,12 +744,7 @@ mod tests {
         }
         let key = SensorKey::new("cpu:0", "usage");
         let window_end = start + Duration::from_secs(3_600);
-        let points = history.chart_points(
-            &key,
-            Duration::from_secs(5 * 60),
-            window_end,
-            320,
-        );
+        let points = history.chart_points(&key, Duration::from_secs(5 * 60), window_end, 320);
 
         assert!(points.iter().all(|point| {
             point.captured_at >= window_end - Duration::from_secs(5 * 60)

@@ -962,9 +962,7 @@ fn chart_points_for_view(
 ) -> Vec<ChartPoint> {
     let revision = history.revision();
     let mut cache = cache.borrow_mut();
-    if cache.revision != revision
-        || cache.window != Some(window)
-        || cache.max_points != max_points
+    if cache.revision != revision || cache.window != Some(window) || cache.max_points != max_points
     {
         cache.revision = revision;
         cache.window = Some(window);
@@ -1060,13 +1058,7 @@ fn install_draw_func(
             let _ = context.stroke();
         }
 
-        draw_hover(
-            context,
-            plot,
-            window,
-            hovered,
-            Some((minimum, maximum)),
-        );
+        draw_hover(context, plot, window, hovered, Some((minimum, maximum)));
         draw_value_labels(context, plot.top, plot.bottom, minimum, maximum, unit);
         draw_time_labels(context, plot, window.duration, range.end_label());
     });
