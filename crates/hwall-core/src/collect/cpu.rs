@@ -290,40 +290,45 @@ fn add_cpu_time_counters(device: &mut Device) {
     let Ok(content) = fs::read_to_string("/proc/stat") else {
         return;
     };
-    let Some(line) = content.lines().find(|line| line.starts_with("cpu ")) else {
-        return;
+    add_cpu_time_counters_from_stat(device, &content);
+}
+
+fn add_cpu_time_counters_from_stat(device: &mut Device, content: &str) {
+    for line in content.lines() {
+        let Some((logical_cpu, total, idle)) = parse_cpu_time_line(line) else {
+            continue;
+        };
+        let (total_key, idle_key) = match logical_cpu {
+            Some(cpu) => (
+                format!("cpu_logical_{cpu}_total_ticks"),
+                format!("cpu_logical_{cpu}_idle_ticks"),
+            ),
+            None => ("cpu_total_ticks".to_owned(), "cpu_idle_ticks".to_owned()),
+        };
+        device.counters.insert(total_key, total);
+        device.counters.insert(idle_key, idle);
+    }
+}
+
+fn parse_cpu_time_line(line: &str) -> Option<(Option<u32>, u64, u64)> {
+    let mut fields = line.split_whitespace();
+    let name = fields.next()?;
+    let logical_cpu = match name {
+        "cpu" => None,
+        _ => Some(name.strip_prefix("cpu")?.parse().ok()?),
     };
-    let Ok(values) = line
-        .split_whitespace()
-        .skip(1)
+    let values = fields
+        .take(8)
         .map(str::parse::<u64>)
         .collect::<Result<Vec<_>, _>>()
-    else {
-        return;
-    };
+        .ok()?;
     if values.len() < 4 {
-        return;
+        return None;
     }
-    let user = values.first().copied().unwrap_or(0);
-    let nice = values.get(1).copied().unwrap_or(0);
-    let system = values.get(2).copied().unwrap_or(0);
-    let idle = values.get(3).copied().unwrap_or(0);
-    let iowait = values.get(4).copied().unwrap_or(0);
-    let irq = values.get(5).copied().unwrap_or(0);
-    let softirq = values.get(6).copied().unwrap_or(0);
-    let steal = values.get(7).copied().unwrap_or(0);
-    let total = user
-        .saturating_add(nice)
-        .saturating_add(system)
-        .saturating_add(idle)
-        .saturating_add(iowait)
-        .saturating_add(irq)
-        .saturating_add(softirq)
-        .saturating_add(steal);
-    device.counters.insert("cpu_total_ticks".to_owned(), total);
-    device
-        .counters
-        .insert("cpu_idle_ticks".to_owned(), idle.saturating_add(iowait));
+
+    let idle = values[3].saturating_add(values.get(4).copied().unwrap_or(0));
+    let total = values.into_iter().fold(0_u64, u64::saturating_add);
+    Some((logical_cpu, total, idle))
 }
 
 #[derive(Debug)]
@@ -453,6 +458,37 @@ fn parse_cpuinfo(content: &str) -> Vec<BTreeMap<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_total_and_logical_cpu_time_counters() {
+        let mut device = Device::new("cpu:0", DeviceClass::Cpu, "CPU");
+        let content = concat!(
+            "cpu 100 5 20 200 10 2 3 4 0 0\n",
+            "cpu0 50 0 10 100 5 1 2 3 0 0\n",
+            "cpu1 50 5 10 100 5 1 1 1 0 0\n",
+            "intr 1234\n",
+        );
+        add_cpu_time_counters_from_stat(&mut device, content);
+
+        assert_eq!(device.counters.get("cpu_total_ticks"), Some(&344));
+        assert_eq!(device.counters.get("cpu_idle_ticks"), Some(&210));
+        assert_eq!(
+            device.counters.get("cpu_logical_0_total_ticks"),
+            Some(&171)
+        );
+        assert_eq!(
+            device.counters.get("cpu_logical_0_idle_ticks"),
+            Some(&105)
+        );
+        assert_eq!(
+            device.counters.get("cpu_logical_1_total_ticks"),
+            Some(&173)
+        );
+        assert_eq!(
+            device.counters.get("cpu_logical_1_idle_ticks"),
+            Some(&105)
+        );
+    }
 
     #[test]
     fn parses_cpu_lists_and_ranges() {

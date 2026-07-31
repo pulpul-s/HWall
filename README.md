@@ -19,6 +19,24 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 
 Hardware support depends on the interfaces exposed by the running kernel and the installed drivers. Missing readings are omitted rather than guessed.
 
+### Motherboard sensor drivers
+
+Motherboard voltages, fan speeds, and board temperatures are available only when the appropriate Linux hwmon driver is loaded. HWall reads sensors already exposed under `/sys/class/hwmon`; it does not load kernel modules or request administrator privileges.
+
+For example, many Nuvoton monitoring chips use the `nct6775` driver. Load a known driver for the current boot with:
+
+```bash
+sudo modprobe nct6775
+```
+
+To load it automatically during future boots:
+
+```bash
+echo nct6775 | sudo tee /etc/modules-load.d/hwall-hwmon.conf
+```
+
+Replace `nct6775` with the driver appropriate for the motherboard. Other common examples include `it87`, `asus-ec-sensors`, and `asus_wmi_sensors`; board-specific driver support may depend on the kernel version. The `sensors` command from `lm-sensors` can be used to verify that readings are available before starting HWall.
+
 ## Requirements
 
 - Rust 1.92 or newer

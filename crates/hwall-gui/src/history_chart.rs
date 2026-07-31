@@ -1,5 +1,6 @@
 use crate::history::{
-    HistoryPoint, SensorKey, SharedHistory, MAX_HISTORY_RETENTION, MIN_HISTORY_RETENTION,
+    nearest_chart_point, ChartPoint, HistoryPoint, HistoryStore, SensorKey, SharedHistory,
+    MAX_HISTORY_RETENTION, MIN_HISTORY_RETENTION,
 };
 use gtk::cairo;
 use gtk::prelude::*;
@@ -10,7 +11,7 @@ use gtk::{
 use hwall_app::{default_log_directory, timestamped_log_path, LogFileWriter, LogFormat, SensorRow};
 use hwall_core::render::format_value;
 use hwall_core::Unit;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -29,10 +30,18 @@ enum ViewRange {
     Manual(ChartWindow),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct ChartWindow {
     duration: Duration,
     end: Instant,
+}
+
+#[derive(Default)]
+struct ChartCache {
+    revision: u64,
+    window: Option<ChartWindow>,
+    max_points: usize,
+    points: Vec<ChartPoint>,
 }
 
 #[derive(Clone, Copy)]
@@ -237,6 +246,7 @@ pub(super) fn panel(
         .build();
     chart.add_css_class("history-chart");
     root.append(&chart);
+    let chart_cache = Rc::new(RefCell::new(ChartCache::default()));
 
     let view_row = gtk::Box::new(Orientation::Horizontal, 10);
     view_row.set_halign(Align::Fill);
@@ -309,7 +319,8 @@ pub(super) fn panel(
         Rc::clone(&history),
         key.clone(),
         Rc::clone(&view_range),
-        Rc::clone(&hover_point),
+        Rc::clone(&hover_ratio),
+        Rc::clone(&chart_cache),
         unit,
     );
     let interaction = InteractionState {
@@ -318,6 +329,7 @@ pub(super) fn panel(
         view_range: Rc::clone(&view_range),
         hover_ratio: Rc::clone(&hover_ratio),
         hover_point: Rc::clone(&hover_point),
+        chart_cache: Rc::clone(&chart_cache),
         range_label: range_label.clone(),
         hover_label: hover_label.clone(),
         view: view.clone(),
@@ -479,7 +491,7 @@ pub(super) fn panel(
             view_for_tick.set_display_duration(window.duration);
         }
         refresh_range_label(&interaction_for_tick);
-        refresh_hover_state(&interaction_for_tick);
+        refresh_hover_state(&interaction_for_tick, &chart);
         update_available_label(&available, &history_for_tick, &key_for_tick);
         chart.queue_draw();
         glib::ControlFlow::Continue
@@ -523,6 +535,7 @@ struct InteractionState {
     view_range: Rc<Cell<ViewRange>>,
     hover_ratio: Rc<Cell<Option<f64>>>,
     hover_point: Rc<Cell<Option<HistoryPoint>>>,
+    chart_cache: Rc<RefCell<ChartCache>>,
     range_label: Label,
     hover_label: Label,
     view: DurationSelector,
@@ -540,7 +553,7 @@ fn install_interactions(chart: &DrawingArea, state: InteractionState) {
         let ratio = PlotArea::from_size(f64::from(chart.width()), f64::from(chart.height()))
             .and_then(|plot| plot.ratio(x, y));
         state_for_enter.hover_ratio.set(ratio);
-        refresh_hover_state(&state_for_enter);
+        refresh_hover_state(&state_for_enter, &chart);
         chart.queue_draw();
     });
 
@@ -553,7 +566,7 @@ fn install_interactions(chart: &DrawingArea, state: InteractionState) {
         let ratio = PlotArea::from_size(f64::from(chart.width()), f64::from(chart.height()))
             .and_then(|plot| plot.ratio(x, y));
         state_for_motion.hover_ratio.set(ratio);
-        refresh_hover_state(&state_for_motion);
+        refresh_hover_state(&state_for_motion, &chart);
         chart.queue_draw();
     });
 
@@ -599,7 +612,7 @@ fn install_interactions(chart: &DrawingArea, state: InteractionState) {
         state_for_scroll.view_range.set(ViewRange::Manual(window));
         state_for_scroll.view.set_display_duration(window.duration);
         refresh_range_label(&state_for_scroll);
-        refresh_hover_state(&state_for_scroll);
+        refresh_hover_state(&state_for_scroll, &chart);
         chart.queue_draw();
         glib::Propagation::Stop
     });
@@ -668,7 +681,7 @@ fn install_interactions(chart: &DrawingArea, state: InteractionState) {
     chart.add_controller(drag);
 }
 
-fn refresh_hover_state(state: &InteractionState) {
+fn refresh_hover_state(state: &InteractionState, chart: &DrawingArea) {
     let Some(ratio) = state.hover_ratio.get() else {
         state.hover_point.set(None);
         state.hover_label.set_text("");
@@ -680,9 +693,14 @@ fn refresh_hover_state(state: &InteractionState) {
             .view_range
             .get()
             .window(history.available_range(&state.key), Instant::now());
-        history
-            .nearest_point(&state.key, instant_at_ratio(window, ratio))
-            .filter(|point| window.contains(point.captured_at))
+        let points = chart_points_for_view(
+            &history,
+            &state.key,
+            window,
+            chart_point_limit(f64::from(chart.width()), f64::from(chart.height())),
+            &state.chart_cache,
+        );
+        nearest_chart_point(&points, instant_at_ratio(window, ratio))
     };
     state.hover_point.set(point);
     let label = point.map(|point| hover_label(point, state.unit));
@@ -935,12 +953,40 @@ fn write_controls(
     updating.set(false);
 }
 
+fn chart_points_for_view(
+    history: &HistoryStore,
+    key: &SensorKey,
+    window: ChartWindow,
+    max_points: usize,
+    cache: &RefCell<ChartCache>,
+) -> Vec<ChartPoint> {
+    let revision = history.revision();
+    let mut cache = cache.borrow_mut();
+    if cache.revision != revision
+        || cache.window != Some(window)
+        || cache.max_points != max_points
+    {
+        cache.revision = revision;
+        cache.window = Some(window);
+        cache.max_points = max_points;
+        cache.points = history.chart_points(key, window.duration, window.end, max_points);
+    }
+    cache.points.clone()
+}
+
+fn chart_point_limit(width: f64, height: f64) -> usize {
+    PlotArea::from_size(width, height)
+        .map(|plot| plot.width().max(64.0) as usize)
+        .unwrap_or(64)
+}
+
 fn install_draw_func(
     chart: &DrawingArea,
     history: SharedHistory,
     key: SensorKey,
     view_range: Rc<Cell<ViewRange>>,
-    hover_point: Rc<Cell<Option<HistoryPoint>>>,
+    hover_ratio: Rc<Cell<Option<f64>>>,
+    chart_cache: Rc<RefCell<ChartCache>>,
     unit: Unit,
 ) {
     chart.set_draw_func(move |_area, context, width, height| {
@@ -961,16 +1007,19 @@ fn install_draw_func(
         }
         let _ = context.stroke();
 
-        let max_points = plot_width.max(64.0) as usize;
+        let max_points = chart_point_limit(width, height);
         let now = Instant::now();
         let history = history.borrow();
         let range = view_range.get();
         let window = range.window(history.available_range(&key), now);
-        let points = history.chart_points(&key, window.duration, window.end, max_points);
+        let points = chart_points_for_view(&history, &key, window, max_points, &chart_cache);
+        let hovered = hover_ratio
+            .get()
+            .and_then(|ratio| nearest_chart_point(&points, instant_at_ratio(window, ratio)));
         let mut values = points.iter().filter_map(|point| point.value);
         let Some(first) = values.next() else {
             draw_empty(context, plot.left, plot.top + plot_height / 2.0);
-            draw_hover(context, plot, window, hover_point.get(), None);
+            draw_hover(context, plot, window, hovered, None);
             draw_time_labels(context, plot, window.duration, range.end_label());
             return;
         };
@@ -990,7 +1039,7 @@ fn install_draw_func(
         context.set_source_rgba(0.20, 0.52, 0.88, 0.95);
         context.set_line_width(1.5);
         let mut active_path = false;
-        for point in points {
+        for point in &points {
             let Some(value) = point.value else {
                 if active_path {
                     let _ = context.stroke();
@@ -1015,7 +1064,7 @@ fn install_draw_func(
             context,
             plot,
             window,
-            hover_point.get(),
+            hovered,
             Some((minimum, maximum)),
         );
         draw_value_labels(context, plot.top, plot.bottom, minimum, maximum, unit);

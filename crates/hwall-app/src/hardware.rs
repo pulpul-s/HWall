@@ -4,8 +4,8 @@ use hwall_core::render::{
     is_low_level_hardware_property, sensor_kind_name,
 };
 use hwall_core::{
-    is_storage_health_property, supports_storage_health, Device, DeviceClass, Sensor, Snapshot,
-    SnapshotStatistics, StorageHealth, StorageHealthAvailability,
+    is_storage_health_property, natural_cmp, supports_storage_health, Device, DeviceClass, Sensor,
+    Snapshot, SnapshotStatistics, StorageHealth, StorageHealthAvailability,
 };
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -429,7 +429,7 @@ fn project_device(
     sensors.sort_by(|left, right| {
         left.group
             .cmp(&right.group)
-            .then_with(|| left.label.cmp(&right.label))
+            .then_with(|| natural_cmp(&left.label, &right.label))
             .then_with(|| left.id.cmp(&right.id))
     });
 
@@ -965,6 +965,45 @@ fn hardware_device_visible(device: &Device) -> bool {
 mod tests {
     use super::*;
     use hwall_core::{Identification, SensorKind, Unit};
+
+    #[test]
+    fn hardware_view_uses_natural_sensor_ordering() {
+        let mut snapshot = Snapshot::new();
+        let mut cpu = Device::new("cpu:0", DeviceClass::Cpu, "CPU");
+        for number in [10, 2, 1] {
+            cpu.sensors.push(Sensor::new(
+                format!("cpu:{number}:utilization"),
+                format!("CPU {number} utilization"),
+                SensorKind::Utilization,
+                Unit::Percent,
+                Some(0.0),
+                "/proc/stat",
+                Identification::Inferred,
+            ));
+        }
+        snapshot.devices.push(cpu);
+
+        let inventory = build_hardware_inventory(
+            &snapshot,
+            &SnapshotStatistics::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let cpu = inventory.device("cpu:0").expect("CPU hardware device");
+
+        assert_eq!(
+            cpu.sensors
+                .iter()
+                .map(|sensor| sensor.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "CPU 1 utilization",
+                "CPU 2 utilization",
+                "CPU 10 utilization",
+            ]
+        );
+    }
 
     #[test]
     fn groups_devices_and_formats_properties() {

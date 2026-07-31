@@ -59,12 +59,6 @@ impl RecordedStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct NumericSample {
-    captured_at: Instant,
-    value: f64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ExtendedRecording {
     pub(super) retention: Duration,
@@ -100,8 +94,32 @@ impl SeriesHistory {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ChartPoint {
+    pub(super) captured_at: Instant,
+    pub(super) timestamp_ms: u128,
+    pub(super) expected_interval: Duration,
     pub(super) x: f64,
     pub(super) value: Option<f64>,
+}
+
+impl ChartPoint {
+    fn from_sample(sample: TimedSample, cutoff: Instant, window: Duration) -> Self {
+        Self {
+            captured_at: sample.captured_at,
+            timestamp_ms: sample.timestamp_ms,
+            expected_interval: sample.expected_interval,
+            x: normalized_x(sample.captured_at, cutoff, window),
+            value: sample.value,
+        }
+    }
+
+    fn history_point(self) -> HistoryPoint {
+        HistoryPoint {
+            captured_at: self.captured_at,
+            timestamp_ms: self.timestamp_ms,
+            expected_interval: self.expected_interval,
+            value: self.value,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -294,24 +312,6 @@ impl HistoryStore {
             .unwrap_or_default()
     }
 
-    pub(super) fn nearest_point(&self, key: &SensorKey, target: Instant) -> Option<HistoryPoint> {
-        let series = self.series.get(key)?;
-        let (first, second) = series.samples.as_slices();
-        [
-            nearest_sample(first, target),
-            nearest_sample(second, target),
-        ]
-        .into_iter()
-        .flatten()
-        .min_by_key(|sample| instant_distance(sample.captured_at, target))
-        .map(|sample| HistoryPoint {
-            captured_at: sample.captured_at,
-            timestamp_ms: sample.timestamp_ms,
-            expected_interval: sample.expected_interval,
-            value: sample.value,
-        })
-    }
-
     pub(super) fn samples(
         &self,
         key: &SensorKey,
@@ -328,7 +328,10 @@ impl HistoryStore {
         series
             .samples
             .iter()
-            .filter(|sample| cutoff.is_none_or(|cutoff| sample.captured_at >= cutoff))
+            .filter(|sample| {
+                cutoff.is_none_or(|cutoff| sample.captured_at >= cutoff)
+                    && sample.captured_at <= now
+            })
             .map(|sample| HistorySample {
                 timestamp_ms: sample.timestamp_ms,
                 value: sample.value,
@@ -353,11 +356,9 @@ impl HistoryStore {
         let mut output = Vec::new();
         let mut segment = Vec::new();
         let mut previous: Option<TimedSample> = None;
-        for sample in series
-            .samples
-            .iter()
-            .filter(|sample| sample.captured_at >= cutoff)
-        {
+        for sample in series.samples.iter().filter(|sample| {
+            sample.captured_at >= cutoff && sample.captured_at <= now
+        }) {
             let discontinuity = previous.is_some_and(|previous| {
                 let max_connected_gap = previous
                     .expected_interval
@@ -372,16 +373,20 @@ impl HistoryStore {
                 append_segment(&mut output, &segment, cutoff, window, max_points);
                 segment.clear();
                 if output.last().is_some_and(|point| point.value.is_some()) {
-                    output.push(ChartPoint {
-                        x: normalized_x(sample.captured_at, cutoff, window),
-                        value: None,
-                    });
+                    output.push(ChartPoint::from_sample(
+                        TimedSample {
+                            value: None,
+                            ..*sample
+                        },
+                        cutoff,
+                        window,
+                    ));
                 }
             }
             if let Some(value) = sample.value {
-                segment.push(NumericSample {
-                    captured_at: sample.captured_at,
-                    value,
+                segment.push(TimedSample {
+                    value: Some(value),
+                    ..*sample
                 });
             }
             previous = Some(*sample);
@@ -389,18 +394,6 @@ impl HistoryStore {
         append_segment(&mut output, &segment, cutoff, window, max_points);
         output
     }
-}
-
-fn nearest_sample(samples: &[TimedSample], target: Instant) -> Option<TimedSample> {
-    let index = samples.partition_point(|sample| sample.captured_at < target);
-    [
-        index.checked_sub(1).and_then(|index| samples.get(index)),
-        samples.get(index),
-    ]
-    .into_iter()
-    .flatten()
-    .min_by_key(|sample| instant_distance(sample.captured_at, target))
-    .copied()
 }
 
 fn instant_distance(left: Instant, right: Instant) -> Duration {
@@ -413,7 +406,7 @@ fn instant_distance(left: Instant, right: Instant) -> Duration {
 
 fn append_segment(
     output: &mut Vec<ChartPoint>,
-    samples: &[NumericSample],
+    samples: &[TimedSample],
     cutoff: Instant,
     window: Duration,
     max_points: usize,
@@ -421,42 +414,88 @@ fn append_segment(
     if samples.is_empty() {
         return;
     }
-    let max_points = max_points.max(8);
-    if samples.len() <= max_points {
-        output.extend(samples.iter().map(|sample| ChartPoint {
-            x: normalized_x(sample.captured_at, cutoff, window),
-            value: Some(sample.value),
-        }));
-        return;
+
+    let selected = largest_triangle_three_buckets(samples, max_points.max(8));
+    output.extend(
+        selected
+            .into_iter()
+            .map(|sample| ChartPoint::from_sample(sample, cutoff, window)),
+    );
+}
+
+fn largest_triangle_three_buckets(samples: &[TimedSample], threshold: usize) -> Vec<TimedSample> {
+    if samples.len() <= threshold || threshold < 3 {
+        return samples.to_vec();
     }
 
-    let bucket_count = (max_points / 4).max(1);
-    let bucket_size = samples.len().div_ceil(bucket_count);
-    for bucket in samples.chunks(bucket_size) {
-        let mut candidates = Vec::with_capacity(4);
-        candidates.push(bucket[0]);
-        if let Some(minimum) = bucket
-            .iter()
-            .copied()
-            .min_by(|left, right| left.value.total_cmp(&right.value))
-        {
-            candidates.push(minimum);
+    let every = (samples.len() - 2) as f64 / (threshold - 2) as f64;
+    let mut selected = Vec::with_capacity(threshold);
+    let mut selected_index = 0;
+    selected.push(samples[0]);
+
+    for bucket in 0..threshold - 2 {
+        let average_start =
+            (((bucket + 1) as f64 * every).floor() as usize + 1).min(samples.len() - 1);
+        let average_end =
+            (((bucket + 2) as f64 * every).floor() as usize + 1).min(samples.len());
+        let average_range = &samples[average_start..average_end];
+        let (average_x, average_y) = if average_range.is_empty() {
+            sample_coordinates(samples[samples.len() - 1], samples[0].captured_at)
+        } else {
+            let (x, y) = average_range.iter().fold((0.0, 0.0), |sum, sample| {
+                let (x, y) = sample_coordinates(*sample, samples[0].captured_at);
+                (sum.0 + x, sum.1 + y)
+            });
+            let count = average_range.len() as f64;
+            (x / count, y / count)
+        };
+
+        let range_start =
+            ((bucket as f64 * every).floor() as usize + 1).min(samples.len() - 1);
+        let range_end = (((bucket + 1) as f64 * every).floor() as usize + 1)
+            .min(samples.len() - 1)
+            .max(range_start + 1);
+        let anchor = samples[selected_index];
+        let (anchor_x, anchor_y) = sample_coordinates(anchor, samples[0].captured_at);
+
+        let mut next_index = range_start;
+        let mut largest_area = f64::NEG_INFINITY;
+        for (offset, sample) in samples[range_start..range_end].iter().enumerate() {
+            let (x, y) = sample_coordinates(*sample, samples[0].captured_at);
+            let area = ((anchor_x - average_x) * (y - anchor_y)
+                - (anchor_x - x) * (average_y - anchor_y))
+                .abs();
+            if area > largest_area {
+                largest_area = area;
+                next_index = range_start + offset;
+            }
         }
-        if let Some(maximum) = bucket
-            .iter()
-            .copied()
-            .max_by(|left, right| left.value.total_cmp(&right.value))
-        {
-            candidates.push(maximum);
-        }
-        candidates.push(bucket[bucket.len() - 1]);
-        candidates.sort_by_key(|sample| sample.captured_at);
-        candidates.dedup_by_key(|sample| sample.captured_at);
-        output.extend(candidates.into_iter().map(|sample| ChartPoint {
-            x: normalized_x(sample.captured_at, cutoff, window),
-            value: Some(sample.value),
-        }));
+
+        selected.push(samples[next_index]);
+        selected_index = next_index;
     }
+
+    selected.push(samples[samples.len() - 1]);
+    selected
+}
+
+fn sample_coordinates(sample: TimedSample, origin: Instant) -> (f64, f64) {
+    (
+        sample
+            .captured_at
+            .saturating_duration_since(origin)
+            .as_secs_f64(),
+        sample.value.unwrap_or_default(),
+    )
+}
+
+pub(super) fn nearest_chart_point(points: &[ChartPoint], target: Instant) -> Option<HistoryPoint> {
+    points
+        .iter()
+        .filter(|point| point.value.is_some())
+        .min_by_key(|point| instant_distance(point.captured_at, target))
+        .copied()
+        .map(ChartPoint::history_point)
 }
 
 fn normalized_x(captured_at: Instant, cutoff: Instant, window: Duration) -> f64 {
@@ -668,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn nearest_point_selects_the_closest_recorded_sample() {
+    fn hover_selects_the_closest_rendered_sample() {
         let start = Instant::now();
         let mut history = HistoryStore::default();
         for seconds in [0, 10, 20] {
@@ -678,13 +717,116 @@ mod tests {
             );
         }
         let key = SensorKey::new("cpu:0", "usage");
-        let point = history
-            .nearest_point(&key, start + Duration::from_secs(14))
-            .expect("nearest point");
+        let points = history.chart_points(
+            &key,
+            Duration::from_secs(60),
+            start + Duration::from_secs(20),
+            100,
+        );
+        let point = nearest_chart_point(&points, start + Duration::from_secs(14))
+            .expect("nearest rendered point");
 
         assert_eq!(point.captured_at, start + Duration::from_secs(10));
         assert_eq!(point.expected_interval, Duration::from_secs(1));
         assert_eq!(point.value, Some(10.0));
+    }
+
+    #[test]
+    fn chart_uses_only_samples_inside_the_visible_window() {
+        let start = Instant::now();
+        let mut history = HistoryStore::default();
+        history.set_global_retention(MAX_HISTORY_RETENTION);
+        for seconds in 0..=7_200 {
+            history.observe_at(
+                &snapshot(Some(seconds as f64)),
+                start + Duration::from_secs(seconds),
+            );
+        }
+        let key = SensorKey::new("cpu:0", "usage");
+        let window_end = start + Duration::from_secs(3_600);
+        let points = history.chart_points(
+            &key,
+            Duration::from_secs(5 * 60),
+            window_end,
+            320,
+        );
+
+        assert!(points.iter().all(|point| {
+            point.captured_at >= window_end - Duration::from_secs(5 * 60)
+                && point.captured_at <= window_end
+        }));
+        assert!(points.iter().all(|point| (0.0..=1.0).contains(&point.x)));
+    }
+
+    #[test]
+    fn long_history_is_decimated_to_actual_recorded_samples() {
+        let start = Instant::now();
+        let mut samples = VecDeque::new();
+        for second in 0..=43_200 {
+            samples.push_back(TimedSample {
+                captured_at: start + Duration::from_secs(second),
+                timestamp_ms: u128::from(second) * 1_000,
+                expected_interval: Duration::from_secs(1),
+                value: Some(if second == 21_600 { 100.0 } else { 10.0 }),
+                status: RecordedStatus::Sensor(SensorStatus::Ok),
+            });
+        }
+        let key = SensorKey::new("cpu:0", "usage");
+        let mut history = HistoryStore::default();
+        history.series.insert(
+            key.clone(),
+            SeriesHistory {
+                samples,
+                recording: Some(ExtendedRecording {
+                    retention: MAX_HISTORY_RETENTION,
+                    persistent: false,
+                }),
+            },
+        );
+
+        let points = history.chart_points(
+            &key,
+            Duration::from_secs(12 * 60 * 60),
+            start + Duration::from_secs(43_200),
+            600,
+        );
+        let numeric = points
+            .iter()
+            .filter(|point| point.value.is_some())
+            .collect::<Vec<_>>();
+
+        assert_eq!(numeric.len(), 600);
+        assert!(numeric.iter().any(|point| point.value == Some(100.0)));
+        assert!(numeric.iter().all(|point| {
+            let second = point.captured_at.duration_since(start).as_secs();
+            point.timestamp_ms == u128::from(second) * 1_000
+        }));
+    }
+
+    #[test]
+    fn hover_point_is_always_one_of_the_rendered_points() {
+        let start = Instant::now();
+        let mut history = HistoryStore::default();
+        history.set_global_retention(Duration::from_secs(15 * 60));
+        for second in 0..=600 {
+            history.observe_at(
+                &snapshot(Some((second % 17) as f64)),
+                start + Duration::from_secs(second),
+            );
+        }
+        let key = SensorKey::new("cpu:0", "usage");
+        let points = history.chart_points(
+            &key,
+            Duration::from_secs(10 * 60),
+            start + Duration::from_secs(600),
+            64,
+        );
+        let hovered = nearest_chart_point(&points, start + Duration::from_secs(333))
+            .expect("rendered hover point");
+
+        assert!(points.iter().any(|point| {
+            point.captured_at == hovered.captured_at && point.value == hovered.value
+        }));
     }
 
     #[test]

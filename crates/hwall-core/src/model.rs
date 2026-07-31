@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -627,11 +628,85 @@ impl Snapshot {
             device.sensors.sort_by(|a, b| {
                 a.kind
                     .cmp(&b.kind)
-                    .then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
+                    .then_with(|| natural_cmp(&a.label, &b.label))
                     .then_with(|| a.id.cmp(&b.id))
             });
         }
     }
+}
+
+pub fn natural_cmp(left: &str, right: &str) -> Ordering {
+    let left = left.to_lowercase();
+    let right = right.to_lowercase();
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let (mut left_index, mut right_index) = (0, 0);
+
+    while left_index < left.len() && right_index < right.len() {
+        let left_digit = left[left_index].is_ascii_digit();
+        let right_digit = right[right_index].is_ascii_digit();
+        if left_digit && right_digit {
+            let left_end = digit_run_end(left, left_index);
+            let right_end = digit_run_end(right, right_index);
+            let ordering = compare_digit_runs(
+                &left[left_index..left_end],
+                &right[right_index..right_end],
+            );
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+            left_index = left_end;
+            right_index = right_end;
+            continue;
+        }
+
+        if left_digit != right_digit {
+            return left[left_index].cmp(&right[right_index]);
+        }
+
+        let left_end = text_run_end(left, left_index);
+        let right_end = text_run_end(right, right_index);
+        let ordering = left[left_index..left_end].cmp(&right[right_index..right_end]);
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+        left_index = left_end;
+        right_index = right_end;
+    }
+
+    left.len().cmp(&right.len())
+}
+
+fn digit_run_end(value: &[u8], start: usize) -> usize {
+    value[start..]
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .map_or(value.len(), |offset| start + offset)
+}
+
+fn text_run_end(value: &[u8], start: usize) -> usize {
+    value[start..]
+        .iter()
+        .position(u8::is_ascii_digit)
+        .map_or(value.len(), |offset| start + offset)
+}
+
+fn compare_digit_runs(left: &[u8], right: &[u8]) -> Ordering {
+    let left_significant = trim_leading_zeroes(left);
+    let right_significant = trim_leading_zeroes(right);
+    left_significant
+        .len()
+        .cmp(&right_significant.len())
+        .then_with(|| left_significant.cmp(right_significant))
+        .then_with(|| left.len().cmp(&right.len()))
+}
+
+fn trim_leading_zeroes(value: &[u8]) -> &[u8] {
+    let first_nonzero = value
+        .iter()
+        .position(|byte| *byte != b'0')
+        .unwrap_or(value.len().saturating_sub(1));
+    &value[first_nonzero..]
 }
 
 #[derive(Debug, Default)]
@@ -722,6 +797,46 @@ fn should_replace_name(existing: &str, incoming: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn natural_sort_orders_numbered_sensor_labels_numerically() {
+        let mut labels = vec!["CPU 10", "CPU 2", "CPU 1", "CPU 02"];
+        labels.sort_by(|left, right| natural_cmp(left, right));
+
+        assert_eq!(labels, vec!["CPU 1", "CPU 2", "CPU 02", "CPU 10"]);
+    }
+
+    #[test]
+    fn snapshot_sort_uses_natural_sensor_ordering() {
+        let mut snapshot = Snapshot::new();
+        let mut cpu = Device::new("cpu:0", DeviceClass::Cpu, "CPU");
+        for number in [10, 2, 1] {
+            cpu.sensors.push(Sensor::new(
+                format!("cpu:{number}:utilization"),
+                format!("CPU {number} utilization"),
+                SensorKind::Utilization,
+                Unit::Percent,
+                Some(0.0),
+                "/proc/stat",
+                Identification::Inferred,
+            ));
+        }
+        snapshot.devices.push(cpu);
+        snapshot.sort();
+
+        assert_eq!(
+            snapshot.devices[0]
+                .sensors
+                .iter()
+                .map(|sensor| sensor.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "CPU 1 utilization",
+                "CPU 2 utilization",
+                "CPU 10 utilization",
+            ]
+        );
+    }
 
     #[test]
     fn overlay_keeps_enriched_label() {

@@ -62,25 +62,68 @@ impl TelemetryDeriver {
 }
 
 fn derive_cpu(device: &mut Device, previous: &BTreeMap<String, u64>) {
-    let Some(total_delta) = counter_delta(device, previous, "cpu_total_ticks") else {
-        return;
-    };
-    let Some(idle_delta) = counter_delta(device, previous, "cpu_idle_ticks") else {
-        return;
-    };
-    if total_delta == 0 || idle_delta > total_delta {
-        return;
-    }
-    let utilization = (total_delta - idle_delta) as f64 * 100.0 / total_delta as f64;
-    push_derived_sensor(
+    if let Some(utilization) = cpu_utilization(
         device,
-        "cpu:0:utilization:total",
-        "Total CPU utilization",
-        SensorKind::Utilization,
-        Unit::Percent,
-        utilization.clamp(0.0, 100.0),
-        "/proc/stat",
-    );
+        previous,
+        "cpu_total_ticks",
+        "cpu_idle_ticks",
+    ) {
+        push_derived_sensor(
+            device,
+            "cpu:0:utilization:total",
+            "Total CPU utilization",
+            SensorKind::Utilization,
+            Unit::Percent,
+            utilization,
+            "/proc/stat",
+        );
+    }
+
+    let mut logical_cpus = device
+        .counters
+        .keys()
+        .filter_map(|key| {
+            key.strip_prefix("cpu_logical_")?
+                .strip_suffix("_total_ticks")?
+                .parse::<u32>()
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    logical_cpus.sort_unstable();
+    logical_cpus.dedup();
+
+    for cpu in logical_cpus {
+        let total_key = format!("cpu_logical_{cpu}_total_ticks");
+        let idle_key = format!("cpu_logical_{cpu}_idle_ticks");
+        let Some(utilization) = cpu_utilization(device, previous, &total_key, &idle_key) else {
+            continue;
+        };
+        push_derived_sensor(
+            device,
+            format!("cpu:0:utilization:logical:{cpu}"),
+            format!("CPU {cpu} utilization"),
+            SensorKind::Utilization,
+            Unit::Percent,
+            utilization,
+            "/proc/stat",
+        );
+    }
+}
+
+fn cpu_utilization(
+    device: &Device,
+    previous: &BTreeMap<String, u64>,
+    total_key: &str,
+    idle_key: &str,
+) -> Option<f64> {
+    let total_delta = counter_delta(device, previous, total_key)?;
+    let idle_delta = counter_delta(device, previous, idle_key)?;
+    if total_delta == 0 || idle_delta > total_delta {
+        return None;
+    }
+    Some(
+        ((total_delta - idle_delta) as f64 * 100.0 / total_delta as f64).clamp(0.0, 100.0),
+    )
 }
 
 fn derive_network(device: &mut Device, previous: &BTreeMap<String, u64>, seconds: f64) {
@@ -408,6 +451,50 @@ mod tests {
         );
         deriver.apply_at(&mut second, start + Duration::from_secs(1));
         assert_eq!(second.devices[0].sensors[0].value, Some(50.0));
+    }
+
+    #[test]
+    fn derives_logical_cpu_utilization() {
+        let start = Instant::now();
+        let mut deriver = TelemetryDeriver::default();
+        let counters = [
+            ("cpu_total_ticks", 200),
+            ("cpu_idle_ticks", 150),
+            ("cpu_logical_0_total_ticks", 100),
+            ("cpu_logical_0_idle_ticks", 80),
+            ("cpu_logical_1_total_ticks", 100),
+            ("cpu_logical_1_idle_ticks", 70),
+        ];
+        let mut first = snapshot_with_counters("cpu:0", DeviceClass::Cpu, &counters);
+        deriver.apply_at(&mut first, start);
+
+        let counters = [
+            ("cpu_total_ticks", 400),
+            ("cpu_idle_ticks", 250),
+            ("cpu_logical_0_total_ticks", 200),
+            ("cpu_logical_0_idle_ticks", 130),
+            ("cpu_logical_1_total_ticks", 200),
+            ("cpu_logical_1_idle_ticks", 80),
+        ];
+        let mut second = snapshot_with_counters("cpu:0", DeviceClass::Cpu, &counters);
+        deriver.apply_at(&mut second, start + Duration::from_secs(1));
+
+        let sensor_value = |id: &str| {
+            second.devices[0]
+                .sensors
+                .iter()
+                .find(|sensor| sensor.id == id)
+                .and_then(|sensor| sensor.value)
+        };
+        assert_eq!(sensor_value("cpu:0:utilization:total"), Some(50.0));
+        assert_eq!(
+            sensor_value("cpu:0:utilization:logical:0"),
+            Some(50.0)
+        );
+        assert_eq!(
+            sensor_value("cpu:0:utilization:logical:1"),
+            Some(90.0)
+        );
     }
 
     #[test]
