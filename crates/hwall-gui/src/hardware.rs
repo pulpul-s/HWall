@@ -569,6 +569,7 @@ fn append_sensor_section(
         let maximum = sensor_value_label(&sensor.maximum, sensor.maximum_color.as_deref());
         let average = sensor_value_label(&sensor.average, sensor.average_color.as_deref());
         let status = sensor_value_label(&sensor.status, sensor.status_color.as_deref());
+        set_sensor_dimmed(&current, &status, sensor.dimmed);
         status.set_tooltip_text(Some(&sensor.status));
 
         for (column, label) in [
@@ -652,7 +653,18 @@ fn update_detail_labels(state: &Rc<RefCell<HardwareState>>, device: &HardwareDev
             &sensor.status,
             sensor.status_color.as_deref(),
         );
+        set_sensor_dimmed(&labels.current, &labels.status, sensor.dimmed);
         labels.status.set_tooltip_text(Some(&sensor.status));
+    }
+}
+
+fn set_sensor_dimmed(current: &gtk::Label, status: &gtk::Label, dimmed: bool) {
+    for label in [current, status] {
+        if dimmed {
+            label.add_css_class("stale-cell");
+        } else {
+            label.remove_css_class("stale-cell");
+        }
     }
 }
 

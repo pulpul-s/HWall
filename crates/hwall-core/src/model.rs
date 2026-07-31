@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -163,6 +163,44 @@ pub enum Identification {
     BoardDatabase,
     Inferred,
     Unidentified,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingFreshness {
+    #[default]
+    Current,
+    Stale,
+    Unavailable,
+}
+
+impl ReadingFreshness {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Stale => "stale",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    pub const fn is_current(self) -> bool {
+        matches!(self, Self::Current)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CollectorId {
+    Cpu,
+    Memory,
+    Network,
+    Block,
+    Power,
+    Thermal,
+    Hwmon,
+    LibSensors,
+    Drm,
+    NvidiaSmi,
+    Energy,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -398,10 +436,16 @@ pub struct Sensor {
     pub max: Option<f64>,
     pub critical: Option<f64>,
     pub status: SensorStatus,
+    #[serde(default)]
+    pub freshness: ReadingFreshness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_updated_unix_ms: Option<u128>,
     pub source: String,
     pub identification: Identification,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, PropertyValue>,
+    #[serde(skip)]
+    pub(crate) collector: Option<CollectorId>,
 }
 
 impl Sensor {
@@ -425,9 +469,12 @@ impl Sensor {
             max: None,
             critical: None,
             status: SensorStatus::Ok,
+            freshness: ReadingFreshness::Current,
+            last_updated_unix_ms: None,
             source: source.into(),
             identification,
             metadata: BTreeMap::new(),
+            collector: None,
         }
     }
 
@@ -459,6 +506,14 @@ impl Sensor {
 
     pub fn has_unconfigured_hardware_alarm(&self) -> bool {
         self.metadata.contains_key("alarm_note")
+    }
+
+    pub fn is_current(&self) -> bool {
+        self.freshness.is_current()
+    }
+
+    pub(crate) fn mark_collector(&mut self, collector: CollectorId) {
+        self.collector = Some(collector);
     }
 }
 
@@ -526,6 +581,10 @@ pub struct Snapshot {
     pub devices: Vec<Device>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    #[serde(skip)]
+    pub(crate) successful_collectors: BTreeSet<CollectorId>,
+    #[serde(skip)]
+    pub(crate) failed_collectors: BTreeSet<CollectorId>,
 }
 
 impl Default for Snapshot {
@@ -545,6 +604,8 @@ impl Snapshot {
             captured_at_unix_ms,
             devices: Vec::new(),
             warnings: Vec::new(),
+            successful_collectors: BTreeSet::new(),
+            failed_collectors: BTreeSet::new(),
         }
     }
 
@@ -558,6 +619,10 @@ impl Snapshot {
         merged.schema_version = self.schema_version.max(dynamic.schema_version);
         merged.warnings = self.warnings.clone();
         merged.warnings.extend(dynamic.warnings);
+        merged.warnings.sort();
+        merged.warnings.dedup();
+        merged.successful_collectors = dynamic.successful_collectors.clone();
+        merged.failed_collectors = dynamic.failed_collectors.clone();
 
         let mut devices: BTreeMap<String, Device> = self
             .devices
@@ -577,24 +642,6 @@ impl Snapshot {
                     let mut sensors = sensors_by_id(std::mem::take(&mut existing.sensors));
                     for mut sensor in incoming.sensors {
                         if let Some(previous) = sensors.get(&sensor.id) {
-                            let depended_on_lm_sensors = previous.identification
-                                == Identification::LibSensorsConfig
-                                || matches!(
-                                    previous.metadata.get("computed_by"),
-                                    Some(PropertyValue::String(value)) if value == "lm-sensors"
-                                );
-                            if sensor.identification == Identification::Unidentified
-                                && depended_on_lm_sensors
-                            {
-                                let mut unavailable = previous.clone();
-                                unavailable.status = SensorStatus::Unavailable;
-                                unavailable.metadata.insert(
-                                    "stale_reason".to_owned(),
-                                    "lm-sensors enrichment unavailable during refresh".into(),
-                                );
-                                sensors.insert(unavailable.id.clone(), unavailable);
-                                continue;
-                            }
                             if sensor.identification == Identification::Unidentified
                                 && previous.identification != Identification::Unidentified
                             {
@@ -617,6 +664,19 @@ impl Snapshot {
         merged
     }
 
+    pub(crate) fn mark_collector_succeeded(&mut self, collector: CollectorId) {
+        self.failed_collectors.remove(&collector);
+        self.successful_collectors.insert(collector);
+    }
+
+    pub(crate) fn collector_succeeded(&self, collector: CollectorId) -> bool {
+        self.successful_collectors.contains(&collector)
+    }
+
+    pub(crate) fn collector_failed(&self, collector: CollectorId) -> bool {
+        self.failed_collectors.contains(&collector)
+    }
+
     pub fn sort(&mut self) {
         self.devices.sort_by(|a, b| {
             a.class
@@ -632,6 +692,12 @@ impl Snapshot {
                     .then_with(|| a.id.cmp(&b.id))
             });
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_collector_failed(&mut self, collector: CollectorId) {
+        self.successful_collectors.remove(&collector);
+        self.failed_collectors.insert(collector);
     }
 }
 
@@ -711,6 +777,8 @@ fn trim_leading_zeroes(value: &[u8]) -> &[u8] {
 pub(crate) struct SnapshotBuilder {
     devices: BTreeMap<String, Device>,
     warnings: Vec<String>,
+    successful_collectors: BTreeSet<CollectorId>,
+    failed_collectors: BTreeSet<CollectorId>,
 }
 
 impl SnapshotBuilder {
@@ -745,10 +813,29 @@ impl SnapshotBuilder {
         self.warnings.push(warning.into());
     }
 
+    pub(crate) fn mark_collector_succeeded(&mut self, collector: CollectorId) {
+        self.failed_collectors.remove(&collector);
+        self.successful_collectors.insert(collector);
+    }
+
+    pub(crate) fn mark_collector_failed(&mut self, collector: CollectorId) {
+        self.successful_collectors.remove(&collector);
+        self.failed_collectors.insert(collector);
+    }
+
     pub(crate) fn finish(self) -> Snapshot {
         let mut snapshot = Snapshot::new();
         snapshot.devices = self.devices.into_values().collect();
         snapshot.warnings = self.warnings;
+        snapshot.successful_collectors = self.successful_collectors;
+        snapshot.failed_collectors = self.failed_collectors;
+        for device in &mut snapshot.devices {
+            for sensor in &mut device.sensors {
+                if sensor.is_current() && sensor.last_updated_unix_ms.is_none() {
+                    sensor.last_updated_unix_ms = Some(snapshot.captured_at_unix_ms);
+                }
+            }
+        }
         snapshot.sort();
         snapshot
     }
@@ -871,8 +958,10 @@ mod tests {
         let merged = base.overlay(dynamic);
         let sensor = &merged.devices[0].sensors[0];
         assert_eq!(sensor.label, "CPU Package");
-        assert_eq!(sensor.value, Some(40.0));
-        assert_eq!(sensor.status, SensorStatus::Unavailable);
+        assert_eq!(sensor.value, Some(41.0));
+        assert_eq!(sensor.identification, Identification::LibSensorsConfig);
+        assert_eq!(sensor.status, SensorStatus::Ok);
+        assert_eq!(sensor.freshness, ReadingFreshness::Current);
     }
 
     #[test]

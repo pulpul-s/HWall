@@ -13,6 +13,39 @@ pub const DEFAULT_HISTORY_RETENTION_SECONDS: u64 = MIN_HISTORY_RETENTION_SECONDS
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemePreference {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+
+    pub fn from_id(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|theme| theme.id() == value)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum Density {
     #[default]
     Compact,
@@ -82,6 +115,7 @@ pub struct AppSettings {
     pub rediscover_seconds: u64,
     pub health_interval_seconds: u64,
     pub density: Density,
+    pub theme: ThemePreference,
     pub close_to_tray: bool,
     pub start_hidden: bool,
     pub plasma_window_placement: bool,
@@ -109,6 +143,7 @@ impl Default for AppSettings {
             rediscover_seconds: 30,
             health_interval_seconds: 1_800,
             density: Density::Compact,
+            theme: ThemePreference::System,
             close_to_tray: false,
             start_hidden: false,
             plasma_window_placement: false,
@@ -187,6 +222,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn theme_ids_round_trip() {
+        for theme in ThemePreference::ALL {
+            assert_eq!(ThemePreference::from_id(theme.id()), Some(theme));
+        }
+        assert_eq!(ThemePreference::from_id("unknown"), None);
+    }
+
+    #[test]
     fn density_ids_round_trip() {
         for density in Density::ALL {
             assert_eq!(Density::from_id(density.id()), Some(density));
@@ -218,6 +261,22 @@ mod tests {
     }
 
     #[test]
+    fn settings_without_theme_use_system_default() {
+        let path = std::env::temp_dir().join(format!(
+            "hwall-settings-theme-default-test-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("main")
+        ));
+        fs::write(&path, r#"{"interval_ms":750}"#).expect("write old settings");
+
+        let loaded = SettingsStore::at(&path).load();
+        assert_eq!(loaded.interval_ms, 750);
+        assert_eq!(loaded.theme, ThemePreference::System);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn settings_round_trip() {
         let path = std::env::temp_dir().join(format!(
             "hwall-settings-test-{}-{}.json",
@@ -227,6 +286,7 @@ mod tests {
         let store = SettingsStore::at(&path);
         let mut settings = AppSettings {
             interval_ms: 750,
+            theme: ThemePreference::Dark,
             plasma_window_placement: true,
             show_identifying_information: true,
             history_retention_seconds: 3_600,
@@ -252,6 +312,7 @@ mod tests {
         store.save(&settings).expect("save settings");
         let loaded = store.load();
         assert_eq!(loaded.interval_ms, 750);
+        assert_eq!(loaded.theme, ThemePreference::Dark);
         assert!(loaded.plasma_window_placement);
         assert!(loaded.show_identifying_information);
         assert_eq!(loaded.history_retention(), Duration::from_secs(3_600));

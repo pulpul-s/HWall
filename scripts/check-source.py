@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import os
 import re
+import subprocess
 import sys
 import tomllib
 import xml.etree.ElementTree as ET
@@ -40,14 +42,64 @@ def production_source(path: Path) -> str:
     return read(path).split("#[cfg(test)]", 1)[0]
 
 
-def release_files() -> list[Path]:
-    return sorted(
-        path
-        for path in ROOT.rglob("*")
-        if path.is_file()
-        and path.name != "SHA256SUMS"
-        and not any(part in {".git", "target"} for part in path.relative_to(ROOT).parts)
-    )
+def git_tracked_files() -> list[Path] | None:
+    try:
+        top_level = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return None
+    if top_level.returncode != 0:
+        return None
+    repository_root = Path(os.fsdecode(top_level.stdout).rstrip("\r\n")).resolve()
+    if repository_root != ROOT.resolve():
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "-z"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+
+    files = []
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        relative = Path(os.fsdecode(raw))
+        if relative.as_posix() == "SHA256SUMS":
+            continue
+        files.append(ROOT / relative)
+    return sorted(files, key=lambda path: path.relative_to(ROOT).as_posix())
+
+
+def write_checksums() -> int:
+    files = git_tracked_files()
+    if files is None:
+        print("source check: checksum generation requires a Git working tree", file=sys.stderr)
+        return 1
+    missing = [path.relative_to(ROOT).as_posix() for path in files if not path.is_file()]
+    if missing:
+        print(
+            f"source check: tracked files are missing from the working tree: {missing}",
+            file=sys.stderr,
+        )
+        return 1
+    lines = [
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(ROOT).as_posix()}"
+        for path in files
+    ]
+    (ROOT / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Updated SHA256SUMS for {len(files)} Git-tracked files")
+    return 0
 
 
 def check_checksums() -> None:
@@ -63,14 +115,41 @@ def check_checksums() -> None:
             fail(f"SHA256SUMS lists {relative!r} more than once")
         entries[relative] = checksum
 
-    files = {path.relative_to(ROOT).as_posix(): path for path in release_files()}
-    if set(entries) != set(files):
-        missing = sorted(set(files) - set(entries))
-        extra = sorted(set(entries) - set(files))
-        fail(f"SHA256SUMS file list differs from the source tree; missing={missing}, extra={extra}")
-        return
+    tracked = git_tracked_files()
+    if tracked is not None:
+        files = {path.relative_to(ROOT).as_posix(): path for path in tracked}
+        if set(entries) != set(files):
+            missing = sorted(set(files) - set(entries))
+            extra = sorted(set(entries) - set(files))
+            detail = (
+                "SHA256SUMS file list differs from Git-tracked source files; "
+                f"missing={missing}, extra={extra}"
+            )
+            if extra:
+                detail += (
+                    ". Files listed as extra are commonly newly added files that "
+                    "have not been staged; add them to Git or run `make checksums` "
+                    "after staging the intended source set"
+                )
+            fail(detail)
+            return
+    else:
+        files = {}
+        for relative in entries:
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                fail(f"SHA256SUMS contains an invalid path: {relative!r}")
+                continue
+            candidate = ROOT / relative_path
+            if not candidate.is_file():
+                fail(f"SHA256SUMS lists a missing source file: {relative}")
+                continue
+            files[relative] = candidate
 
     for relative, path in files.items():
+        if not path.is_file():
+            fail(f"Git-tracked source file is missing: {relative}")
+            continue
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if entries[relative] != actual:
             fail(f"SHA256SUMS mismatch for {relative}")
@@ -352,6 +431,8 @@ def check_makefile() -> None:
         "$(RELEASE_GUI) $(RELEASE_CLI) &:",
         "cargo build --locked --workspace",
         "cargo build --locked --workspace --release",
+        "checksums:",
+        "python3 scripts/check-source.py --write-checksums",
         "install: release",
         "install-gui: release-gui",
         "install-cli: release-cli",
@@ -383,7 +464,9 @@ def check_package_hygiene() -> None:
         "SOURCE-VALIDATION",
     )
     forbidden_archive_suffixes = (".tar", ".tar.gz", ".tar.xz", ".tar.zst", ".tgz", ".zip")
-    for path in ROOT.rglob("*"):
+    tracked = git_tracked_files()
+    source_paths = tracked if tracked is not None else sorted(ROOT.rglob("*"))
+    for path in source_paths:
         relative = path.relative_to(ROOT)
         if any(part in ignored_directories for part in relative.parts):
             continue
@@ -401,7 +484,7 @@ def check_package_hygiene() -> None:
             fail(f"generated or review artifact in source tree: {relative}")
 
     retired = "hw" + "scope"
-    for path in sorted(ROOT.rglob("*")):
+    for path in source_paths:
         if not path.is_file() or path.name == "SHA256SUMS":
             continue
         try:
@@ -413,6 +496,12 @@ def check_package_hygiene() -> None:
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--write-checksums"]:
+        return write_checksums()
+    if len(sys.argv) > 1:
+        print("usage: check-source.py [--write-checksums]", file=sys.stderr)
+        return 2
+
     check_checksums()
     check_workspace()
     check_metadata()

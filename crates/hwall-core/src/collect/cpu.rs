@@ -1,6 +1,7 @@
 use super::util::{add_string, list_dirs, read_trimmed, read_u64};
 use crate::model::{
-    Device, DeviceClass, Identification, PropertyValue, Sensor, SensorKind, SnapshotBuilder, Unit,
+    CollectorId, Device, DeviceClass, Identification, PropertyValue, Sensor, SensorKind,
+    SnapshotBuilder, Unit,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -156,6 +157,7 @@ fn cpu_topology_from_cpuinfo(records: &[BTreeMap<String, String>]) -> Option<Cpu
 }
 
 fn add_dynamic(device: &mut Device) {
+    let first_dynamic_sensor = device.sensors.len();
     add_cpu_time_counters(device);
     let root = Path::new("/sys/devices/system/cpu/cpufreq");
     let mut all_policy_frequencies = Vec::new();
@@ -283,6 +285,10 @@ fn add_dynamic(device: &mut Device) {
         device
             .properties
             .insert("boost_enabled".to_owned(), (boost != 0).into());
+    }
+
+    for sensor in &mut device.sensors[first_dynamic_sensor..] {
+        sensor.mark_collector(CollectorId::Cpu);
     }
 }
 

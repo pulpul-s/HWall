@@ -114,9 +114,13 @@ impl LogFileWriter {
         match self.format {
             LogFormat::Csv => write_csv_sample(&mut self.writer, timestamp_ms, rows)?,
             LogFormat::JsonLines => {
+                let current_rows = rows
+                    .iter()
+                    .filter(|row| row.kind != crate::RowKind::Sensor || row.current_sample)
+                    .collect::<Vec<_>>();
                 let record = serde_json::json!({
                     "timestamp_ms": timestamp_ms,
-                    "rows": rows,
+                    "rows": current_rows,
                 });
                 serde_json::to_writer(&mut self.writer, &record)
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -212,7 +216,10 @@ fn write_csv_sample(
     timestamp_ms: u128,
     rows: &[SensorRow],
 ) -> io::Result<()> {
-    for row in rows.iter().filter(|row| row.kind == crate::RowKind::Sensor) {
+    for row in rows
+        .iter()
+        .filter(|row| row.kind == crate::RowKind::Sensor && row.current_sample)
+    {
         writeln!(
             writer,
             "{},{},{},{},{},{},{},{},{}",

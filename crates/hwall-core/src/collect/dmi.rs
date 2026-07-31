@@ -1,9 +1,9 @@
 use super::memory::{locator_is_specific, slot_device_id};
-use super::util::{add_string, command_exists, read_trimmed};
+use super::util::{add_string, command_path, read_trimmed, run_command_configured, HELPER_TIMEOUT};
 use crate::model::{Device, DeviceClass, PropertyValue, SnapshotBuilder};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 pub(super) fn collect(
     builder: &mut SnapshotBuilder,
@@ -107,17 +107,13 @@ fn collect_sysfs(builder: &mut SnapshotBuilder, include_sensitive: bool) {
 }
 
 fn collect_dmidecode(builder: &mut SnapshotBuilder, include_sensitive: bool) {
-    if !command_exists("dmidecode") {
+    let Some(program) = command_path("dmidecode") else {
         return;
-    }
+    };
 
-    let Ok(output) = Command::new("dmidecode")
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-    else {
+    let mut command = Command::new(program);
+    command.env("LC_ALL", "C");
+    let Ok(output) = run_command_configured(&mut command, HELPER_TIMEOUT) else {
         return;
     };
     if !output.status.success() {

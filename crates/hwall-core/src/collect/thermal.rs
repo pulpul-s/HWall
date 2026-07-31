@@ -1,6 +1,6 @@
 use super::util::{basename, list_dirs, read_f64, read_trimmed};
 use crate::model::{
-    Device, DeviceClass, Identification, Sensor, SensorKind, SnapshotBuilder, Unit,
+    CollectorId, Device, DeviceClass, Identification, Sensor, SensorKind, SnapshotBuilder, Unit,
 };
 
 pub(super) fn collect(builder: &mut SnapshotBuilder) {
@@ -19,7 +19,7 @@ pub(super) fn collect(builder: &mut SnapshotBuilder) {
         );
         device.bus_address = Some(name.clone());
         if let Some(raw) = read_f64(path.join("temp")) {
-            let sensor = Sensor::new(
+            let mut sensor = Sensor::new(
                 format!("thermal:{name}:temperature"),
                 zone_type,
                 SensorKind::Temperature,
@@ -28,6 +28,7 @@ pub(super) fn collect(builder: &mut SnapshotBuilder) {
                 path.join("temp").to_string_lossy(),
                 Identification::FirmwareLabel,
             );
+            sensor.mark_collector(CollectorId::Thermal);
             device.sensors.push(sensor);
         }
         builder.add_device(device);

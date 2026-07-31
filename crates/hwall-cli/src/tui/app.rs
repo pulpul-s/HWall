@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
+fn next_refresh_deadline(started: Instant, interval: Duration) -> Instant {
+    started + interval
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputMode {
     Normal,
@@ -134,19 +138,22 @@ impl App {
         loop {
             match self.worker.poll() {
                 MonitorPoll::Update(update) => {
-                    self.refresh_in_flight = false;
-                    self.last_collection_duration = Some(update.elapsed);
-                    let now = Instant::now();
-                    if now >= self.next_refresh {
-                        self.next_refresh = now + self.interval;
+                    let storage_health_update = !update.storage_health_device_ids.is_empty();
+                    if !storage_health_update {
+                        self.refresh_in_flight = false;
+                        self.last_collection_duration = Some(update.elapsed);
                     }
-
                     let discarded_for_pause = self.discard_in_flight_update;
-                    let apply_update = !self.paused && !discarded_for_pause;
-                    self.discard_in_flight_update = false;
+                    let apply_update =
+                        !self.paused && (!discarded_for_pause || storage_health_update);
+                    if !storage_health_update {
+                        self.discard_in_flight_update = false;
+                    }
                     if apply_update {
                         self.snapshot = update.snapshot;
-                        self.statistics.observe(&self.snapshot);
+                        if !storage_health_update {
+                            self.statistics.observe(&self.snapshot);
+                        }
                         self.rebuild_report();
                         self.status_message = if update.forced_rediscovery {
                             "Full hardware rediscovery completed".to_owned()
@@ -186,7 +193,8 @@ impl App {
             MonitorRequestResult::Accepted => {
                 self.refresh_in_flight = true;
                 self.discard_in_flight_update = false;
-                self.next_refresh = Instant::now() + self.interval;
+                let now = Instant::now();
+                self.next_refresh = next_refresh_deadline(now, self.interval);
                 self.dirty = true;
                 self.force_refresh_pending = false;
                 if force_rediscovery {
@@ -664,4 +672,32 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_deadline_is_start_to_start() {
+        let started = Instant::now();
+        let interval = Duration::from_millis(200);
+        let finished = started + Duration::from_millis(150);
+        let deadline = next_refresh_deadline(started, interval);
+
+        assert_eq!(
+            deadline.saturating_duration_since(finished),
+            Duration::from_millis(50),
+        );
+    }
+
+    #[test]
+    fn refresh_overrun_has_no_additional_delay() {
+        let started = Instant::now();
+        let interval = Duration::from_millis(200);
+        let finished = started + Duration::from_millis(341);
+        let deadline = next_refresh_deadline(started, interval);
+
+        assert_eq!(deadline.saturating_duration_since(finished), Duration::ZERO,);
+    }
 }

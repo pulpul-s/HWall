@@ -198,7 +198,8 @@ impl HistoryStore {
         let expected_interval = self.expected_interval;
         for device in &snapshot.devices {
             for sensor in &device.sensors {
-                if sensor.is_intermittent() || !chartable_unit(sensor.unit) {
+                if sensor.is_intermittent() || !sensor.is_current() || !chartable_unit(sensor.unit)
+                {
                     continue;
                 }
                 let key = SensorKey::new(&device.id, &sensor.id);
@@ -548,6 +549,20 @@ mod tests {
         }
         let key = SensorKey::new("cpu:0", "usage");
         assert!(history.available_duration(&key) <= DEFAULT_HISTORY_RETENTION);
+    }
+
+    #[test]
+    fn stale_readings_are_not_recorded_as_new_samples() {
+        let start = Instant::now();
+        let mut history = HistoryStore::default();
+        history.observe_at(&snapshot(Some(10.0)), start);
+
+        let mut stale = snapshot(Some(99.0));
+        stale.devices[0].sensors[0].freshness = hwall_core::ReadingFreshness::Stale;
+        history.observe_at(&stale, start + Duration::from_secs(1));
+
+        let key = SensorKey::new("cpu:0", "usage");
+        assert_eq!(history.series[&key].samples.len(), 1);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use hwall_core::{Sensor, SensorKind, SensorStatus, Snapshot, Unit};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_WARNING_COLOR: &str = "#e5a50a";
@@ -22,6 +22,7 @@ pub enum AlertState {
     CriticalPending,
     Warning,
     Critical,
+    Suspended,
 }
 
 impl AlertState {
@@ -30,6 +31,7 @@ impl AlertState {
             Self::Normal => AlertSeverity::Normal,
             Self::WarningPending | Self::Warning => AlertSeverity::Warning,
             Self::CriticalPending | Self::Critical => AlertSeverity::Critical,
+            Self::Suspended => AlertSeverity::Normal,
         }
     }
 
@@ -40,6 +42,7 @@ impl AlertState {
             Self::CriticalPending => "Critical pending",
             Self::Warning => "Warning",
             Self::Critical => "Critical",
+            Self::Suspended => "Suspended",
         }
     }
 }
@@ -208,6 +211,7 @@ struct Candidate {
 struct RuntimeAlert {
     active: AlertSeverity,
     candidate: Option<Candidate>,
+    suspended: bool,
     last_notification: Option<(Instant, AlertSeverity)>,
     episode_notified: bool,
 }
@@ -222,6 +226,9 @@ impl AlertEngine {
         let Some(runtime) = self.entries.get(sensor_key) else {
             return AlertState::Normal;
         };
+        if runtime.suspended {
+            return AlertState::Suspended;
+        }
         match runtime
             .candidate
             .as_ref()
@@ -258,6 +265,7 @@ impl AlertEngine {
     ) -> Vec<AlertEvent> {
         self.entries.retain(|key, _| rules.contains_key(key));
         let mut events = Vec::new();
+        let mut seen = BTreeSet::new();
 
         for device in &snapshot.devices {
             for sensor in &device.sensors {
@@ -269,23 +277,27 @@ impl AlertEngine {
                     self.entries.remove(&key);
                     continue;
                 };
-                if matches!(
-                    sensor.status,
-                    SensorStatus::Fault | SensorStatus::Unavailable
-                ) {
-                    if let Some(runtime) = self.entries.get_mut(&key) {
-                        runtime.candidate = None;
-                    }
+                seen.insert(key.clone());
+                if !sensor.is_current()
+                    || matches!(
+                        sensor.status,
+                        SensorStatus::Fault | SensorStatus::Unavailable
+                    )
+                {
+                    let runtime = self.entries.entry(key).or_default();
+                    runtime.candidate = None;
+                    runtime.suspended = true;
                     continue;
                 }
                 let Some(value) = sensor.value.filter(|value| value.is_finite()) else {
-                    if let Some(runtime) = self.entries.get_mut(&key) {
-                        runtime.candidate = None;
-                    }
+                    let runtime = self.entries.entry(key).or_default();
+                    runtime.candidate = None;
+                    runtime.suspended = true;
                     continue;
                 };
 
                 let runtime = self.entries.entry(key.clone()).or_default();
+                runtime.suspended = false;
                 let measured = rule.severity_for_value(value);
                 let previous = runtime.active;
 
@@ -342,6 +354,13 @@ impl AlertEngine {
                         value: hwall_core::render::format_value(value, &sensor.unit),
                     });
                 }
+            }
+        }
+
+        for (key, runtime) in &mut self.entries {
+            if !seen.contains(key) {
+                runtime.candidate = None;
+                runtime.suspended = true;
             }
         }
 
@@ -598,5 +617,52 @@ mod tests {
         assert_eq!(engine.state(&key), AlertState::Warning);
         engine.evaluate(&snapshot(76.0), &rules, start + Duration::from_secs(2));
         assert_eq!(engine.state(&key), AlertState::Normal);
+    }
+
+    #[test]
+    fn stale_reading_suspends_active_alert_until_fresh_data_returns() {
+        let rule = AlertRule {
+            warning_above: Some(80.0),
+            duration_seconds: 0,
+            ..AlertRule::default()
+        };
+        let key = sensor_key("cpu:0", "temp:package");
+        let rules = BTreeMap::from([(key.clone(), rule)]);
+        let start = Instant::now();
+        let mut engine = AlertEngine::default();
+        engine.evaluate(&snapshot(85.0), &rules, start);
+        assert_eq!(engine.state(&key), AlertState::Warning);
+
+        let mut stale = snapshot(85.0);
+        stale.devices[0].sensors[0].freshness = hwall_core::ReadingFreshness::Stale;
+        assert!(engine
+            .evaluate(&stale, &rules, start + Duration::from_secs(1))
+            .is_empty());
+        assert_eq!(engine.state(&key), AlertState::Suspended);
+
+        let recovered = engine.evaluate(&snapshot(70.0), &rules, start + Duration::from_secs(2));
+        assert_eq!(engine.state(&key), AlertState::Normal);
+        assert_eq!(recovered.len(), 1);
+        assert!(recovered[0].recovered);
+    }
+
+    #[test]
+    fn missing_sensor_suspends_active_alert_without_recovery_event() {
+        let rule = AlertRule {
+            warning_above: Some(80.0),
+            duration_seconds: 0,
+            ..AlertRule::default()
+        };
+        let key = sensor_key("cpu:0", "temp:package");
+        let rules = BTreeMap::from([(key.clone(), rule)]);
+        let start = Instant::now();
+        let mut engine = AlertEngine::default();
+        engine.evaluate(&snapshot(85.0), &rules, start);
+
+        let empty = Snapshot::new();
+        assert!(engine
+            .evaluate(&empty, &rules, start + Duration::from_secs(1))
+            .is_empty());
+        assert_eq!(engine.state(&key), AlertState::Suspended);
     }
 }

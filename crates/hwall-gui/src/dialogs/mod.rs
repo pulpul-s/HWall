@@ -8,7 +8,7 @@ use gtk::{
 };
 use hwall_app::{
     alert_supported_sensor, present_sensor, rule_summary, storage_health_availability_text,
-    AlertRule, AlertState, AppSettings, Density, LogFormat, LogScope, SensorRow,
+    AlertRule, AlertState, AppSettings, Density, LogFormat, LogScope, SensorRow, ThemePreference,
 };
 use hwall_core::render::{
     format_property_value, format_sample_age, format_value, humanize_key, sensor_kind_name,

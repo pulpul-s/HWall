@@ -91,27 +91,34 @@ pub(crate) fn show_settings(
     density.set_active_id(Some(current.density.id()));
     attach_labeled(&grid, 1, "Table density", &density);
 
+    let theme = ComboBoxText::new();
+    for value in ThemePreference::ALL {
+        theme.append(Some(value.id()), value.display_name());
+    }
+    theme.set_active_id(Some(current.theme.id()));
+    attach_labeled(&grid, 2, "Theme", &theme);
+
     let log_format = ComboBoxText::new();
     for format in LogFormat::ALL {
         log_format.append(Some(format.id()), format.display_name());
     }
     log_format.set_active_id(Some(current.logging_format.id()));
-    attach_labeled(&grid, 2, "Logging format", &log_format);
+    attach_labeled(&grid, 3, "Logging format", &log_format);
 
     let log_scope = ComboBoxText::new();
     for scope in LogScope::ALL {
         log_scope.append(Some(scope.id()), scope.display_name());
     }
     log_scope.set_active_id(Some(current.logging_scope.id()));
-    attach_labeled(&grid, 3, "Logging scope", &log_scope);
+    attach_labeled(&grid, 4, "Logging scope", &log_scope);
 
     let close_to_tray = CheckButton::with_label("Close the window to the system tray");
     close_to_tray.set_active(current.close_to_tray);
-    grid.attach(&close_to_tray, 0, 4, 2, 1);
+    grid.attach(&close_to_tray, 0, 5, 2, 1);
 
     let start_hidden = CheckButton::with_label("Start hidden when a system tray is available");
     start_hidden.set_active(current.start_hidden);
-    grid.attach(&start_hidden, 0, 5, 2, 1);
+    grid.attach(&start_hidden, 0, 6, 2, 1);
 
     let plasma_window_placement =
         CheckButton::with_label("Remember window placement on KDE Plasma");
@@ -122,18 +129,18 @@ pub(crate) fn show_settings(
     } else {
         "Available in a KDE Plasma session when the Plasma 6 KConfig and QDBus tools are installed."
     }));
-    grid.attach(&plasma_window_placement, 0, 6, 2, 1);
+    grid.attach(&plasma_window_placement, 0, 7, 2, 1);
 
     let favorites_only = CheckButton::with_label("Start in favorites-only view");
     favorites_only.set_active(current.favorites_only);
-    grid.attach(&favorites_only, 0, 7, 2, 1);
+    grid.attach(&favorites_only, 0, 8, 2, 1);
 
     let show_sensor_groups = CheckButton::with_label("Show sensor-type subheaders");
     show_sensor_groups.set_active(current.show_sensor_groups);
     show_sensor_groups.set_tooltip_text(Some(
         "When disabled, readings are shown directly under each device",
     ));
-    grid.attach(&show_sensor_groups, 0, 8, 2, 1);
+    grid.attach(&show_sensor_groups, 0, 9, 2, 1);
 
     let show_identifying_information = CheckButton::with_label("Show identifying information");
     show_identifying_information.set_active(current.show_identifying_information);
@@ -141,7 +148,7 @@ pub(crate) fn show_settings(
         "Include available serial numbers, UUIDs, WWNs, MAC addresses and other ",
         "hardware identifiers. Some values may require additional permissions."
     )));
-    grid.attach(&show_identifying_information, 0, 9, 2, 1);
+    grid.attach(&show_identifying_information, 0, 10, 2, 1);
 
     let history_retention = DurationSelector::new(
         "",
@@ -153,12 +160,12 @@ pub(crate) fn show_settings(
         "Retain this amount of recent history for every numeric sensor. ",
         "Longer periods use more memory."
     )));
-    attach_labeled(&grid, 10, "Keep sensor history", &history_retention.widget);
+    attach_labeled(&grid, 11, "Keep sensor history", &history_retention.widget);
 
     let columns_title = Label::new(Some("Visible columns"));
     columns_title.set_halign(Align::Start);
     columns_title.add_css_class("heading");
-    grid.attach(&columns_title, 0, 11, 2, 1);
+    grid.attach(&columns_title, 0, 12, 2, 1);
 
     let current_column = CheckButton::with_label("Current");
     current_column.set_active(table.column_visible("current"));
@@ -181,7 +188,7 @@ pub(crate) fn show_settings(
     ] {
         columns.append(check);
     }
-    grid.attach(&columns, 0, 12, 2, 1);
+    grid.attach(&columns, 0, 13, 2, 1);
 
     dialog.content_area().append(&grid);
     let table_for_response = table.clone();
@@ -194,6 +201,11 @@ pub(crate) fn show_settings(
                 .active_id()
                 .as_deref()
                 .and_then(Density::from_id)
+                .unwrap_or_default();
+            updated.theme = theme
+                .active_id()
+                .as_deref()
+                .and_then(ThemePreference::from_id)
                 .unwrap_or_default();
             updated.logging_format = log_format
                 .active_id()

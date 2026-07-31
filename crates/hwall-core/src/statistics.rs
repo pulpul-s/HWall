@@ -61,7 +61,7 @@ impl SnapshotStatistics {
         self.sample_rounds = self.sample_rounds.saturating_add(1);
         for device in &snapshot.devices {
             for sensor in &device.sensors {
-                if sensor.is_intermittent() {
+                if sensor.is_intermittent() || !sensor.is_current() {
                     continue;
                 }
                 if matches!(
@@ -170,6 +170,22 @@ mod tests {
         let mut statistics = SnapshotStatistics::new();
         statistics.observe(&snapshot_with(40.0));
         statistics.observe(&unavailable);
+
+        let value = statistics
+            .get("cpu:0", "temp:package")
+            .expect("tracked sensor");
+        assert_eq!(value.samples, 1);
+        assert_eq!(value.maximum, 40.0);
+    }
+
+    #[test]
+    fn ignores_stale_readings() {
+        let mut stale = snapshot_with(99.0);
+        stale.devices[0].sensors[0].freshness = crate::ReadingFreshness::Stale;
+
+        let mut statistics = SnapshotStatistics::new();
+        statistics.observe(&snapshot_with(40.0));
+        statistics.observe(&stale);
 
         let value = statistics
             .get("cpu:0", "temp:package")

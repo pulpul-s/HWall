@@ -1,6 +1,6 @@
 use crate::{alert_supported_sensor, AlertRule, AlertState};
-use hwall_core::render::{format_sample_age_compact, format_value};
-use hwall_core::{RunningStatistics, Sensor, SensorStatus};
+use hwall_core::render::{format_reading_age_compact, format_sample_age_compact, format_value};
+use hwall_core::{ReadingFreshness, RunningStatistics, Sensor, SensorStatus};
 
 const EMPTY_VALUE: &str = "—";
 
@@ -16,6 +16,7 @@ pub struct SensorPresentation {
     pub maximum_color: Option<String>,
     pub average_color: Option<String>,
     pub status_color: Option<String>,
+    pub dimmed: bool,
 }
 
 pub fn present_sensor(
@@ -31,6 +32,7 @@ pub fn present_sensor(
             .unwrap_or_else(|| EMPTY_VALUE.to_owned())
     };
     let color_for = |value: Option<f64>| {
+        sensor.is_current().then_some(())?;
         rule.and_then(|rule| {
             rule.color_for(rule.severity_for_value(value?))
                 .map(str::to_owned)
@@ -51,18 +53,35 @@ pub fn present_sensor(
         minimum_color: color_for(observed.map(|value| value.minimum)),
         maximum_color: color_for(observed.map(|value| value.maximum)),
         average_color: color_for(observed.map(|value| value.average)),
-        status_color: if matches!(
-            sensor.status,
-            SensorStatus::Fault | SensorStatus::Unavailable
-        ) {
+        status_color: if !sensor.is_current()
+            || matches!(
+                sensor.status,
+                SensorStatus::Fault | SensorStatus::Unavailable
+            ) {
             None
         } else {
             rule.and_then(|rule| rule.color_for(state.severity()).map(str::to_owned))
         },
+        dimmed: !sensor.is_current(),
     }
 }
 
 fn sensor_status(sensor: &Sensor, rule: Option<&AlertRule>, state: AlertState) -> String {
+    match sensor.freshness {
+        ReadingFreshness::Stale => {
+            return sensor.last_updated_unix_ms.map_or_else(
+                || "Stale".to_owned(),
+                |timestamp| {
+                    format!(
+                        "Stale — last updated {}",
+                        format_reading_age_compact(timestamp)
+                    )
+                },
+            );
+        }
+        ReadingFreshness::Unavailable => return "Unavailable".to_owned(),
+        ReadingFreshness::Current => {}
+    }
     match sensor.status {
         SensorStatus::Fault => return "Fault".to_owned(),
         SensorStatus::Unavailable => return "Unavailable".to_owned(),
@@ -108,6 +127,26 @@ mod tests {
             present_sensor(&sensor(42.0), None, None, AlertState::Normal).status,
             "Normal"
         );
+    }
+
+    #[test]
+    fn stale_reading_is_dimmed_and_reports_last_update() {
+        let mut stale = sensor(42.0);
+        stale.freshness = ReadingFreshness::Stale;
+        stale.last_updated_unix_ms = Some(0);
+        let presentation = present_sensor(&stale, None, None, AlertState::Suspended);
+        assert!(presentation.dimmed);
+        assert!(presentation.status.starts_with("Stale — last updated "));
+        assert_eq!(presentation.current, "42.0 °C");
+    }
+
+    #[test]
+    fn unavailable_reading_is_dimmed() {
+        let mut unavailable = sensor(42.0);
+        unavailable.freshness = ReadingFreshness::Unavailable;
+        let presentation = present_sensor(&unavailable, None, None, AlertState::Suspended);
+        assert!(presentation.dimmed);
+        assert_eq!(presentation.status, "Unavailable");
     }
 
     #[test]

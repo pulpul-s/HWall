@@ -41,8 +41,9 @@ pub use plasma::{
 pub use presentation::{present_sensor, SensorPresentation};
 pub use rows::{build_sensor_rows, ordered_device_entries, RowKind, RowOptions, SensorRow};
 pub use settings::{
-    AppSettings, ColumnSettings, Density, SettingsStore, DEFAULT_HISTORY_RETENTION_SECONDS,
-    MAX_HISTORY_RETENTION_SECONDS, MIN_HISTORY_RETENTION_SECONDS, MIN_REFRESH_INTERVAL_MS,
+    AppSettings, ColumnSettings, Density, SettingsStore, ThemePreference,
+    DEFAULT_HISTORY_RETENTION_SECONDS, MAX_HISTORY_RETENTION_SECONDS,
+    MIN_HISTORY_RETENTION_SECONDS, MIN_REFRESH_INTERVAL_MS,
 };
 pub use terminal::{render_terminal_view, TerminalView};
 pub use visibility::VisibilityState;

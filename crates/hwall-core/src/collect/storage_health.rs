@@ -1,6 +1,7 @@
 use super::util::{
     basename, command_exists, is_nvme_controller_id, is_nvme_controller_name,
-    is_virtual_block_device_name, list_dirs, read_bool01, run_command, run_command_elevated,
+    is_virtual_block_device_name, list_dirs, read_bool01, run_command_elevated,
+    run_storage_command, system_command_exists,
 };
 use crate::model::{
     Device, DeviceClass, Identification, PropertyValue, Sensor, SensorKind, SnapshotBuilder,
@@ -153,12 +154,17 @@ fn collect_smartctl(
     elevated: bool,
     sampled_at: u128,
 ) -> Result<StorageHealthStatus, HelperFailure> {
-    if !command_exists("smartctl") {
+    let helper_exists = if elevated {
+        system_command_exists("smartctl")
+    } else {
+        command_exists("smartctl")
+    };
+    if !helper_exists {
         return Err(HelperFailure::HelperMissing(
             "smartctl was not found.".to_owned(),
         ));
     }
-    if elevated && !command_exists("pkexec") {
+    if elevated && !system_command_exists("pkexec") {
         return Err(HelperFailure::HelperMissing(
             "pkexec was not found, so an administrator retry is unavailable.".to_owned(),
         ));
@@ -271,12 +277,17 @@ fn collect_nvme(
     elevated: bool,
     sampled_at: u128,
 ) -> Result<StorageHealthStatus, HelperFailure> {
-    if !command_exists("nvme") {
+    let helper_exists = if elevated {
+        system_command_exists("nvme")
+    } else {
+        command_exists("nvme")
+    };
+    if !helper_exists {
         return Err(HelperFailure::HelperMissing(
             "nvme-cli was not found.".to_owned(),
         ));
     }
-    if elevated && !command_exists("pkexec") {
+    if elevated && !system_command_exists("pkexec") {
         return Err(HelperFailure::HelperMissing(
             "pkexec was not found, so an administrator retry is unavailable.".to_owned(),
         ));
@@ -431,7 +442,7 @@ where
     if elevated {
         run_command_elevated(program, args)
     } else {
-        run_command(program, args)
+        run_storage_command(program, args)
     }
 }
 

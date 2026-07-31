@@ -465,13 +465,22 @@ fn list_item_label(item: &gtk::ListItem) -> Option<Label> {
 fn render_label(kind: DataColumn, row: &SensorRow, label: &Label) {
     let text = kind.text(row);
     set_label_text(label, text.as_ref(), kind.color(row));
-    for class in ["device-cell", "group-cell", "alarm-cell", "fault-cell"] {
+    for class in [
+        "device-cell",
+        "group-cell",
+        "alarm-cell",
+        "fault-cell",
+        "stale-cell",
+    ] {
         label.remove_css_class(class);
     }
     match row.kind {
         RowKind::Device => label.add_css_class("device-cell"),
         RowKind::Header => label.add_css_class("group-cell"),
         RowKind::Sensor => {}
+    }
+    if row.dimmed && matches!(kind, DataColumn::Current | DataColumn::Status) {
+        label.add_css_class("stale-cell");
     }
     if kind == DataColumn::Status {
         match row.status.as_str() {

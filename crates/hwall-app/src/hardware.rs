@@ -152,6 +152,7 @@ pub struct HardwareSensor {
     pub maximum_color: Option<String>,
     pub average_color: Option<String>,
     pub status_color: Option<String>,
+    pub dimmed: bool,
 }
 
 pub fn build_hardware_inventory(
@@ -517,6 +518,7 @@ fn project_sensor(
         maximum_color: presentation.maximum_color,
         average_color: presentation.average_color,
         status_color: presentation.status_color,
+        dimmed: presentation.dimmed,
     }
 }
 

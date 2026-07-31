@@ -4,7 +4,7 @@ use super::util::{
     run_command, symlink_basename,
 };
 use crate::model::{
-    Device, DeviceClass, Identification, Sensor, SensorKind, SnapshotBuilder, Unit,
+    CollectorId, Device, DeviceClass, Identification, Sensor, SensorKind, SnapshotBuilder, Unit,
 };
 use std::fs;
 use std::path::Path;
@@ -96,8 +96,12 @@ fn collect_drm(builder: &mut SnapshotBuilder) {
                 .insert("power_state".to_owned(), state.into());
         }
         add_amd_gpu_metrics_header(&mut device, &device_path);
+        for sensor in &mut device.sensors {
+            sensor.mark_collector(CollectorId::Drm);
+        }
         builder.add_device(device);
     }
+    builder.mark_collector_succeeded(CollectorId::Drm);
 }
 
 fn add_amd_gpu_metrics_header(device: &mut Device, root: &Path) {
@@ -222,6 +226,7 @@ fn add_frequency_from_dpm(device: &mut Device, root: &Path, file: &str, label: &
 
 fn collect_nvidia_smi(builder: &mut SnapshotBuilder, include_sensitive: bool) {
     if !command_exists("nvidia-smi") {
+        builder.mark_collector_failed(CollectorId::NvidiaSmi);
         return;
     }
     let fields = [
@@ -245,11 +250,14 @@ fn collect_nvidia_smi(builder: &mut SnapshotBuilder, include_sensitive: bool) {
         "nvidia-smi",
         [query.as_str(), "--format=csv,noheader,nounits"],
     ) else {
+        builder.mark_collector_failed(CollectorId::NvidiaSmi);
         return;
     };
     if !output.status.success() {
+        builder.mark_collector_failed(CollectorId::NvidiaSmi);
         return;
     }
+    builder.mark_collector_succeeded(CollectorId::NvidiaSmi);
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let columns = line.split(',').map(str::trim).collect::<Vec<_>>();
         if columns.len() != 13 {
@@ -363,7 +371,7 @@ fn push_parsed(
     let Ok(value) = raw.parse::<f64>() else {
         return;
     };
-    device.sensors.push(Sensor::new(
+    let mut sensor = Sensor::new(
         format!("{}:nvidia:{id}", device.id),
         label,
         kind,
@@ -371,5 +379,7 @@ fn push_parsed(
         Some(value * multiplier),
         "nvidia-smi",
         Identification::VendorApi,
-    ));
+    );
+    sensor.mark_collector(CollectorId::NvidiaSmi);
+    device.sensors.push(sensor);
 }

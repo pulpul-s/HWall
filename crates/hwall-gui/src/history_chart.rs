@@ -1,19 +1,22 @@
 use crate::history::{
-    nearest_chart_point, ChartPoint, HistoryPoint, HistoryStore, SensorKey, SharedHistory,
-    MAX_HISTORY_RETENTION, MIN_HISTORY_RETENTION,
+    nearest_chart_point, ChartPoint, HistoryPoint, HistorySample, HistoryStore, SensorKey,
+    SharedHistory, MAX_HISTORY_RETENTION, MIN_HISTORY_RETENTION,
 };
 use gtk::cairo;
 use gtk::prelude::*;
 use gtk::{
     glib, Align, Button, CheckButton, ComboBoxText, DrawingArea, EventControllerMotion,
-    EventControllerScroll, EventControllerScrollFlags, GestureDrag, Label, Orientation, SpinButton,
+    EventControllerScroll, EventControllerScrollFlags, FileChooserAction, FileChooserNative,
+    GestureDrag, Label, Orientation, ResponseType, SpinButton, Window,
 };
-use hwall_app::{default_log_directory, timestamped_log_path, LogFileWriter, LogFormat, SensorRow};
+use hwall_app::{timestamped_log_path, LogFileWriter, LogFormat, SensorRow};
 use hwall_core::render::format_value;
 use hwall_core::Unit;
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PLOT_LEFT: f64 = 68.0;
@@ -22,6 +25,21 @@ const PLOT_TOP: f64 = 12.0;
 const PLOT_BOTTOM_MARGIN: f64 = 30.0;
 const ZOOM_STEP: f64 = 1.25;
 const CHART_REFRESH_PERIOD: Duration = Duration::from_millis(100);
+const EXPORT_RESULT_POLL_PERIOD: Duration = Duration::from_millis(50);
+
+pub(super) struct ExportContext {
+    pub parent: Window,
+    pub directory: Rc<RefCell<PathBuf>>,
+    pub on_exported: Box<dyn Fn(Result<PathBuf, String>)>,
+}
+
+struct HistoryExport {
+    path: PathBuf,
+    format: LogFormat,
+    template: SensorRow,
+    unit: Unit,
+    samples: Vec<HistorySample>,
+}
 
 #[derive(Clone, Copy)]
 enum ViewRange {
@@ -199,8 +217,13 @@ pub(super) fn panel(
     row_template: SensorRow,
     default_format: LogFormat,
     on_recording_changed: impl Fn() + 'static,
-    on_exported: impl Fn(Result<PathBuf, String>) + 'static,
+    export_context: ExportContext,
 ) -> gtk::Box {
+    let ExportContext {
+        parent,
+        directory: export_directory,
+        on_exported,
+    } = export_context;
     let global_retention = history.borrow().global_retention();
     let existing_recording = history.borrow().recording(&key);
     let recording_state = existing_recording.unwrap_or(crate::history::ExtendedRecording {
@@ -437,32 +460,83 @@ pub(super) fn panel(
     let history_for_export = Rc::clone(&history);
     let key_for_export = key.clone();
     let view_range_for_export = Rc::clone(&view_range);
-    let exported: Rc<dyn Fn(Result<PathBuf, String>)> = Rc::new(on_exported);
+    let exported: Rc<dyn Fn(Result<PathBuf, String>)> = Rc::from(on_exported);
+    let export_button = export.clone();
+    let weak_parent = parent.downgrade();
     export.connect_clicked(move |_| {
+        let Some(parent) = weak_parent.upgrade() else {
+            return;
+        };
         let format = export_format
             .active_id()
             .as_deref()
             .and_then(LogFormat::from_id)
             .unwrap_or_default();
-        let now = Instant::now();
-        let chart_window = {
-            let history = history_for_export.borrow();
-            view_range_for_export
-                .get()
-                .window(history.available_range(&key_for_export), now)
-        };
-        let (window, end) = match export_range.active_id().as_deref() {
-            Some("view") => (Some(chart_window.duration), chart_window.end),
-            _ => (None, now),
-        };
-        let samples = history_for_export
-            .borrow()
-            .samples(&key_for_export, window, end);
-        let path = timestamped_log_path(default_log_directory(), format);
-        let result = export_samples(&path, format, &row_template, unit, &samples)
-            .map(|()| path)
-            .map_err(|error| error.to_string());
-        exported(result);
+        let export_current_view = export_range.active_id().as_deref() == Some("view");
+        let directory = export_directory.borrow().clone();
+        if let Err(error) = std::fs::create_dir_all(&directory) {
+            exported(Err(format!(
+                "could not prepare export directory {}: {error}",
+                directory.display()
+            )));
+            return;
+        }
+
+        let chooser = FileChooserNative::new(
+            Some("Save sensor history"),
+            Some(&parent),
+            FileChooserAction::Save,
+            Some("_Save"),
+            Some("_Cancel"),
+        );
+        chooser.set_modal(true);
+        chooser.set_current_name(&default_export_filename(format));
+        let folder = gtk::gio::File::for_path(&directory);
+        let _ = chooser.set_current_folder(Some(&folder));
+        export_button.set_sensitive(false);
+
+        let history_for_response = Rc::clone(&history_for_export);
+        let key_for_response = key_for_export.clone();
+        let view_range_for_response = Rc::clone(&view_range_for_export);
+        let export_directory_for_response = Rc::clone(&export_directory);
+        let exported_for_response = Rc::clone(&exported);
+        let export_for_response = export_button.clone();
+        let template = row_template.clone();
+        chooser.run_async(move |chooser, response| {
+            let selected_path = chooser.file().and_then(|file| file.path());
+            chooser.destroy();
+            if response != ResponseType::Accept {
+                export_for_response.set_sensitive(true);
+                return;
+            }
+            let Some(path) = selected_path else {
+                export_for_response.set_sensitive(true);
+                exported_for_response(Err("no export destination was selected".to_owned()));
+                return;
+            };
+            let path = ensure_export_extension(path, format);
+            if let Some(parent) = path.parent() {
+                *export_directory_for_response.borrow_mut() = parent.to_path_buf();
+            }
+
+            let samples = selected_export_samples(
+                &history_for_response,
+                &key_for_response,
+                view_range_for_response.get(),
+                export_current_view,
+            );
+            start_history_export(
+                HistoryExport {
+                    path,
+                    format,
+                    template,
+                    unit,
+                    samples,
+                },
+                export_for_response,
+                exported_for_response,
+            );
+        });
     });
 
     changed();
@@ -500,8 +574,81 @@ pub(super) fn panel(
     root
 }
 
+fn selected_export_samples(
+    history: &SharedHistory,
+    key: &SensorKey,
+    view_range: ViewRange,
+    current_view_only: bool,
+) -> Vec<HistorySample> {
+    let now = Instant::now();
+    let history = history.borrow();
+    let chart_window = view_range.window(history.available_range(key), now);
+    let (window, end) = if current_view_only {
+        (Some(chart_window.duration), chart_window.end)
+    } else {
+        (None, now)
+    };
+    history.samples(key, window, end)
+}
+
+fn start_history_export(
+    export: HistoryExport,
+    button: Button,
+    on_exported: Rc<dyn Fn(Result<PathBuf, String>)>,
+) {
+    let (result_tx, result_rx) = mpsc::channel();
+    let spawn = thread::Builder::new()
+        .name("hwall-history-export".to_owned())
+        .spawn(move || {
+            let HistoryExport {
+                path,
+                format,
+                template,
+                unit,
+                samples,
+            } = export;
+            let result = export_samples(&path, format, &template, unit, &samples)
+                .map(|()| path)
+                .map_err(|error| error.to_string());
+            let _ = result_tx.send(result);
+        });
+    if let Err(error) = spawn {
+        button.set_sensitive(true);
+        on_exported(Err(format!("could not start export worker: {error}")));
+        return;
+    }
+
+    glib::timeout_add_local(EXPORT_RESULT_POLL_PERIOD, move || {
+        let result = match result_rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("history export worker disconnected".to_owned())
+            }
+        };
+        button.set_sensitive(true);
+        on_exported(result);
+        glib::ControlFlow::Break
+    });
+}
+
+fn default_export_filename(format: LogFormat) -> String {
+    timestamped_log_path(Path::new(""), format)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("hwall-history")
+        .to_owned()
+}
+
+fn ensure_export_extension(mut path: PathBuf, format: LogFormat) -> PathBuf {
+    if path.extension().is_none() {
+        path.set_extension(format.id());
+    }
+    path
+}
+
 fn export_samples(
-    path: &std::path::Path,
+    path: &Path,
     format: LogFormat,
     template: &SensorRow,
     unit: Unit,
@@ -1222,5 +1369,23 @@ mod tests {
 
         let latest = panned_window(oldest, available, -10.0, now);
         assert_eq!(latest.end, now);
+    }
+
+    #[test]
+    fn export_filename_uses_selected_format() {
+        assert!(default_export_filename(LogFormat::Csv).ends_with(".csv"));
+        assert!(default_export_filename(LogFormat::JsonLines).ends_with(".jsonl"));
+    }
+
+    #[test]
+    fn export_extension_is_added_only_when_missing() {
+        assert_eq!(
+            ensure_export_extension(PathBuf::from("history"), LogFormat::Csv),
+            PathBuf::from("history.csv")
+        );
+        assert_eq!(
+            ensure_export_extension(PathBuf::from("history.custom"), LogFormat::Csv),
+            PathBuf::from("history.custom")
+        );
     }
 }

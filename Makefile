@@ -14,7 +14,7 @@ RELEASE_CLI := $(RELEASE_DIR)/hwall-cli
 WORKSPACE_INPUTS := Cargo.lock Cargo.toml rust-toolchain.toml \
 	$(shell find crates -type f -print)
 
-.PHONY: build release release-gui release-cli check test lint format \
+.PHONY: build release release-gui release-cli check test lint verify format checksums \
 	verify-format verify-source install install-gui install-cli clean \
 	uninstall
 
@@ -35,7 +35,7 @@ release-gui: $(RELEASE_GUI)
 release-cli: $(RELEASE_CLI)
 
 check: Cargo.lock verify-format verify-source
-	cargo check --locked --workspace --all-targets
+	cargo check --locked --workspace --all-targets --all-features
 
 verify-format:
 	cargo fmt --all -- --check
@@ -49,8 +49,13 @@ test: Cargo.lock
 lint: Cargo.lock
 	cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
+verify: check test lint
+
 format:
 	cargo fmt --all
+
+checksums:
+	python3 scripts/check-source.py --write-checksums
 
 install: release
 	install -Dm755 "$(RELEASE_GUI)" "$(DESTDIR)$(BINDIR)/hwall"

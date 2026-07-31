@@ -6,7 +6,8 @@ use super::util::{
     read_f64, read_trimmed, read_u64, run_command,
 };
 use crate::model::{
-    Device, DeviceClass, Identification, Sensor, SensorKind, SensorStatus, SnapshotBuilder, Unit,
+    CollectorId, Device, DeviceClass, Identification, Sensor, SensorKind, SensorStatus,
+    SnapshotBuilder, Unit,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -14,7 +15,16 @@ use std::path::Path;
 
 pub(super) fn collect(builder: &mut SnapshotBuilder, use_libsensors: bool) {
     let libsensors = if use_libsensors {
-        load_libsensors_chips()
+        match load_libsensors_chips() {
+            Ok(chips) => {
+                builder.mark_collector_succeeded(CollectorId::LibSensors);
+                chips
+            }
+            Err(()) => {
+                builder.mark_collector_failed(CollectorId::LibSensors);
+                Vec::new()
+            }
+        }
     } else {
         Vec::new()
     };
@@ -164,6 +174,7 @@ fn collect_chip(builder: &mut SnapshotBuilder, root: &Path, libsensors: &[LibSen
                 .metadata
                 .insert("aggregation".to_owned(), "average".into());
         }
+        sensor.mark_collector(CollectorId::Hwmon);
         device.sensors.push(sensor);
     }
 
@@ -385,22 +396,16 @@ fn pci_token(address: &str) -> Option<String> {
     Some(format!("{bus}{device}"))
 }
 
-fn load_libsensors_chips() -> Vec<LibSensorsChip> {
+fn load_libsensors_chips() -> Result<Vec<LibSensorsChip>, ()> {
     if !command_exists("sensors") {
-        return Vec::new();
+        return Err(());
     }
-    let Ok(output) = run_command("sensors", ["-j"]) else {
-        return Vec::new();
-    };
+    let output = run_command("sensors", ["-j"]).map_err(|_| ())?;
     if !output.status.success() {
-        return Vec::new();
+        return Err(());
     }
-    let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else {
-        return Vec::new();
-    };
-    let Some(chips) = value.as_object() else {
-        return Vec::new();
-    };
+    let value = serde_json::from_slice::<Value>(&output.stdout).map_err(|_| ())?;
+    let chips = value.as_object().ok_or(())?;
     let mut parsed = Vec::new();
     for (chip_name, chip_value) in chips {
         let prefix = chip_name.split('-').next().unwrap_or(chip_name).to_owned();
@@ -441,7 +446,7 @@ fn load_libsensors_chips() -> Vec<LibSensorsChip> {
             });
         }
     }
-    parsed
+    Ok(parsed)
 }
 
 #[cfg(test)]

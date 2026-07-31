@@ -1,8 +1,10 @@
 use clap::{Args as ClapArgs, ValueEnum};
-use hwall_core::render::{escape_delimited, format_value, sensor_kind_name};
+use hwall_core::render::{
+    escape_delimited, format_reading_age_compact, format_value, sensor_kind_name,
+};
 use hwall_core::{
-    collect_snapshot, CollectOptions, DeviceClass, MonitorCollector, SensorKind, SensorStatus,
-    Snapshot, Unit,
+    collect_snapshot, CollectOptions, DeviceClass, MonitorCollector, ReadingFreshness, Sensor,
+    SensorKind, SensorStatus, Snapshot, Unit,
 };
 use serde_json::{json, Value};
 use std::io::{self, Write};
@@ -136,16 +138,21 @@ enum SensorStatusFilter {
     Ok,
     Alarm,
     Fault,
+    Stale,
     Unavailable,
 }
 
-impl From<SensorStatusFilter> for SensorStatus {
-    fn from(value: SensorStatusFilter) -> Self {
-        match value {
-            SensorStatusFilter::Ok => Self::Ok,
-            SensorStatusFilter::Alarm => Self::Alarm,
-            SensorStatusFilter::Fault => Self::Fault,
-            SensorStatusFilter::Unavailable => Self::Unavailable,
+impl SensorStatusFilter {
+    fn matches(self, sensor: &Sensor) -> bool {
+        match self {
+            Self::Stale => sensor.freshness == ReadingFreshness::Stale,
+            Self::Unavailable => {
+                sensor.freshness == ReadingFreshness::Unavailable
+                    || (sensor.is_current() && sensor.status == SensorStatus::Unavailable)
+            }
+            Self::Ok => sensor.is_current() && sensor.status == SensorStatus::Ok,
+            Self::Alarm => sensor.is_current() && sensor.status == SensorStatus::Alarm,
+            Self::Fault => sensor.is_current() && sensor.status == SensorStatus::Fault,
         }
     }
 }
@@ -155,7 +162,7 @@ struct Filters<'a> {
     class: Option<DeviceClass>,
     device: Option<&'a str>,
     kind: Option<SensorKind>,
-    status: Option<SensorStatus>,
+    status: Option<SensorStatusFilter>,
 }
 
 struct Record<'a> {
@@ -170,6 +177,8 @@ struct Record<'a> {
     raw_value: Option<&'a str>,
     unit: Unit,
     status: SensorStatus,
+    freshness: ReadingFreshness,
+    last_updated_unix_ms: Option<u128>,
     limits_unconfigured: bool,
 }
 
@@ -189,7 +198,7 @@ pub(crate) fn run(args: Args, options: CollectOptions) -> ExitCode {
         class: args.class.map(Into::into),
         device: args.device.as_deref(),
         kind: args.kind.map(Into::into),
-        status: args.status.map(Into::into),
+        status: args.status,
     };
     let records = records(&snapshot, filters);
     let result = match args.format {
@@ -229,8 +238,8 @@ fn records<'a>(snapshot: &'a Snapshot, filters: Filters<'_>) -> Vec<Record<'a>> 
             let limits_unconfigured = sensor.has_unconfigured_hardware_alarm();
             if filters.kind.is_some_and(|kind| kind != sensor.kind)
                 || filters.status.is_some_and(|status| {
-                    status != sensor.status
-                        || (status == SensorStatus::Alarm && limits_unconfigured)
+                    !status.matches(sensor)
+                        || (matches!(status, SensorStatusFilter::Alarm) && limits_unconfigured)
                 })
             {
                 continue;
@@ -252,6 +261,8 @@ fn records<'a>(snapshot: &'a Snapshot, filters: Filters<'_>) -> Vec<Record<'a>> 
                 raw_value: sensor.raw_value.as_deref(),
                 unit: sensor.unit,
                 status: sensor.status,
+                freshness: sensor.freshness,
+                last_updated_unix_ms: sensor.last_updated_unix_ms,
                 limits_unconfigured,
             });
         }
@@ -315,7 +326,7 @@ fn write_delimited(mut out: impl Write, records: &[Record<'_>], delimiter: char)
             record.raw_value.unwrap_or_default().to_owned(),
             record.unit.as_str().to_owned(),
             record.formatted.clone(),
-            status_name(record).to_owned(),
+            status_name(record),
         ];
         let line = fields
             .iter()
@@ -343,6 +354,8 @@ fn write_json(mut out: impl Write, records: &[Record<'_>]) -> io::Result<()> {
                 "unit": record.unit.as_str(),
                 "formatted": record.formatted.as_str(),
                 "status": status_key(record),
+                "freshness": record.freshness.as_str(),
+                "last_updated_unix_ms": record.last_updated_unix_ms,
             })
         })
         .collect();
@@ -350,19 +363,31 @@ fn write_json(mut out: impl Write, records: &[Record<'_>]) -> io::Result<()> {
     writeln!(out)
 }
 
-fn status_name(record: &Record<'_>) -> &'static str {
-    if record.limits_unconfigured {
-        "Limits not configured"
-    } else {
-        record.status.display_name()
+fn status_name(record: &Record<'_>) -> String {
+    match record.freshness {
+        ReadingFreshness::Stale => record.last_updated_unix_ms.map_or_else(
+            || "Stale".to_owned(),
+            |timestamp| {
+                format!(
+                    "Stale — last updated {}",
+                    format_reading_age_compact(timestamp)
+                )
+            },
+        ),
+        ReadingFreshness::Unavailable => "Unavailable".to_owned(),
+        ReadingFreshness::Current if record.limits_unconfigured => {
+            "Limits not configured".to_owned()
+        }
+        ReadingFreshness::Current => record.status.display_name().to_owned(),
     }
 }
 
 fn status_key(record: &Record<'_>) -> &'static str {
-    if record.limits_unconfigured {
-        "limits_not_configured"
-    } else {
-        record.status.as_str()
+    match record.freshness {
+        ReadingFreshness::Stale => "stale",
+        ReadingFreshness::Unavailable => "unavailable",
+        ReadingFreshness::Current if record.limits_unconfigured => "limits_not_configured",
+        ReadingFreshness::Current => record.status.as_str(),
     }
 }
 
@@ -381,6 +406,22 @@ fn truncate(value: &str, maximum: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_status_filter_matches_freshness() {
+        let mut sensor = Sensor::new(
+            "temp:0",
+            "Temperature",
+            SensorKind::Temperature,
+            Unit::Celsius,
+            Some(42.0),
+            "/test",
+            hwall_core::Identification::KernelLabel,
+        );
+        sensor.freshness = ReadingFreshness::Stale;
+        assert!(SensorStatusFilter::Stale.matches(&sensor));
+        assert!(!SensorStatusFilter::Ok.matches(&sensor));
+    }
 
     #[test]
     fn delimiter_escaping_quotes_special_fields() {

@@ -28,6 +28,13 @@ impl SensorValueLabels {
             &presentation.status,
             presentation.status_color.as_deref(),
         );
+        for label in [&self.current, &self.status] {
+            if presentation.dimmed {
+                label.add_css_class("stale-cell");
+            } else {
+                label.remove_css_class("stale-cell");
+            }
+        }
         self.samples
             .set_text(&observed.map_or(0, |value| value.samples).to_string());
         set_label_text(
@@ -48,6 +55,8 @@ impl SensorValueLabels {
     }
 
     fn set_unavailable(&self) {
+        self.current.remove_css_class("stale-cell");
+        self.status.remove_css_class("stale-cell");
         set_label_text(&self.current, "Unavailable", None);
         set_label_text(&self.status, "Unavailable", None);
         self.samples.set_text("0");
@@ -75,6 +84,7 @@ pub(crate) struct SensorDetailsRequest {
     pub history: SharedHistory,
     pub history_key: SensorKey,
     pub default_log_format: LogFormat,
+    pub export_directory: Rc<RefCell<PathBuf>>,
     pub read_live: Box<dyn Fn() -> Option<LiveSensorDetails>>,
     pub configure_alert: Box<dyn Fn(&Window)>,
     pub recording_changed: Rc<dyn Fn()>,
@@ -95,6 +105,7 @@ pub(crate) fn show_sensor_details(
         history,
         history_key,
         default_log_format,
+        export_directory,
         read_live,
         configure_alert: on_configure_alert,
         recording_changed,
@@ -116,7 +127,11 @@ pub(crate) fn show_sensor_details(
             row_template,
             default_log_format,
             move || changed_for_panel(),
-            exported,
+            crate::history_chart::ExportContext {
+                parent: window.clone(),
+                directory: export_directory,
+                on_exported: exported,
+            },
         ));
     }
 

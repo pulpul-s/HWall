@@ -53,11 +53,8 @@ fn normalize_refresh_interval(interval: Duration) -> Duration {
     interval.max(Duration::from_millis(MIN_REFRESH_INTERVAL_MS))
 }
 
-fn advance_refresh_deadline(mut deadline: Instant, now: Instant, interval: Duration) -> Instant {
-    while deadline <= now {
-        deadline += interval;
-    }
-    deadline
+fn next_refresh_deadline(started: Instant, interval: Duration) -> Instant {
+    started + interval
 }
 
 pub(super) struct Session {
@@ -177,13 +174,16 @@ impl Session {
         loop {
             match worker.poll() {
                 MonitorPoll::Update(update) => {
-                    self.refresh_in_flight = false;
+                    let storage_health_update = !update.storage_health_device_ids.is_empty();
+                    if !storage_health_update {
+                        self.refresh_in_flight = false;
+                    }
                     let sensitive_changed = update.include_sensitive.is_some()
                         && self.in_flight_sensitive.take().is_some();
                     let sensitive_is_current =
                         update.include_sensitive == Some(self.desired_sensitive);
-                    let storage_health_changed = !update.storage_health_device_ids.is_empty()
-                        && self.in_flight_health_refresh.take().is_some();
+                    let storage_health_changed =
+                        storage_health_update && self.in_flight_health_refresh.take().is_some();
                     let administrative_update =
                         storage_health_changed || (sensitive_changed && sensitive_is_current);
                     let apply = if sensitive_changed {
@@ -191,7 +191,9 @@ impl Session {
                     } else {
                         administrative_update || (!self.paused && !self.discard_in_flight_update)
                     };
-                    self.discard_in_flight_update = false;
+                    if !storage_health_update {
+                        self.discard_in_flight_update = false;
+                    }
                     if apply {
                         self.snapshot = update.snapshot;
                         if !administrative_update {
@@ -217,11 +219,14 @@ impl Session {
         let Some(worker) = self.worker.as_ref() else {
             return;
         };
-        if self.disconnected || self.refresh_in_flight {
+        if self.disconnected {
             return;
         }
 
         if let Some(include_sensitive) = self.pending_sensitive {
+            if self.refresh_in_flight {
+                return;
+            }
             match worker.request_sensitive(include_sensitive) {
                 MonitorRequestResult::Accepted => {
                     self.refresh_in_flight = true;
@@ -234,21 +239,22 @@ impl Session {
             return;
         }
 
-        if let Some(pending) = self.pending_health_refresh.clone() {
-            let elevated = pending.reason == HealthRefreshReason::ElevatedManual;
-            match worker.request_storage_health(pending.device_ids.clone(), elevated) {
-                MonitorRequestResult::Accepted => {
-                    self.refresh_in_flight = true;
-                    self.in_flight_health_refresh = Some(pending);
-                    self.pending_health_refresh = None;
+        if self.in_flight_health_refresh.is_none() {
+            if let Some(pending) = self.pending_health_refresh.clone() {
+                let elevated = pending.reason == HealthRefreshReason::ElevatedManual;
+                match worker.request_storage_health(pending.device_ids.clone(), elevated) {
+                    MonitorRequestResult::Accepted => {
+                        self.in_flight_health_refresh = Some(pending);
+                        self.pending_health_refresh = None;
+                    }
+                    MonitorRequestResult::Busy => {}
+                    MonitorRequestResult::Disconnected => self.disconnected = true,
                 }
-                MonitorRequestResult::Busy => {}
-                MonitorRequestResult::Disconnected => self.disconnected = true,
+                return;
             }
-            return;
         }
 
-        if self.paused {
+        if self.paused || self.refresh_in_flight {
             return;
         }
         let now = Instant::now();
@@ -260,7 +266,7 @@ impl Session {
             MonitorRequestResult::Accepted => {
                 self.refresh_in_flight = true;
                 self.force_rediscovery = false;
-                self.next_refresh = advance_refresh_deadline(self.next_refresh, now, self.interval);
+                self.next_refresh = next_refresh_deadline(now, self.interval);
             }
             MonitorRequestResult::Busy => {}
             MonitorRequestResult::Disconnected => self.disconnected = true,
@@ -293,10 +299,6 @@ impl Session {
 
     pub(super) fn extended_history_count(&self) -> usize {
         self.history.borrow().extended_count()
-    }
-
-    pub(super) fn sample_rounds(&self) -> u64 {
-        self.statistics.sample_rounds()
     }
 
     pub(super) fn is_paused(&self) -> bool {
@@ -445,28 +447,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn refresh_deadline_keeps_its_original_phase() {
-        let start = Instant::now();
-        let interval = Duration::from_secs(1);
-        let next = advance_refresh_deadline(
-            start + interval,
-            start + interval + Duration::from_millis(75),
-            interval,
-        );
+    fn refresh_deadline_is_start_to_start() {
+        let started = Instant::now();
+        let interval = Duration::from_millis(200);
+        let finished = started + Duration::from_millis(150);
+        let deadline = next_refresh_deadline(started, interval);
 
-        assert_eq!(next, start + Duration::from_secs(2));
+        assert_eq!(
+            deadline.saturating_duration_since(finished),
+            Duration::from_millis(50),
+        );
     }
 
     #[test]
-    fn refresh_deadline_skips_missed_slots() {
-        let start = Instant::now();
+    fn refresh_overrun_has_no_additional_delay() {
+        let started = Instant::now();
         let interval = Duration::from_millis(200);
-        let next = advance_refresh_deadline(
-            start + interval,
-            start + Duration::from_millis(875),
-            interval,
-        );
+        let finished = started + Duration::from_millis(341);
+        let deadline = next_refresh_deadline(started, interval);
 
-        assert_eq!(next, start + Duration::from_millis(1_000));
+        assert_eq!(deadline.saturating_duration_since(finished), Duration::ZERO,);
     }
 }

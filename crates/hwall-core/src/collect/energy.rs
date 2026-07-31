@@ -5,7 +5,9 @@
 
 use super::perf_event::{PerfCounter, PerfEvent};
 use super::util::{canonical, list_dirs, read_trimmed, read_u64};
-use crate::model::{Device, DeviceClass, Identification, Sensor, SensorKind, Snapshot, Unit};
+use crate::model::{
+    CollectorId, Device, DeviceClass, Identification, Sensor, SensorKind, Snapshot, Unit,
+};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -62,14 +64,7 @@ impl EnergyCollector {
         for reading in readings {
             attach(snapshot, reading);
         }
-    }
-
-    pub(crate) fn clear_sensors(snapshot: &mut Snapshot) {
-        for device in &mut snapshot.devices {
-            device
-                .sensors
-                .retain(|sensor| sensor.metadata_str("derived_by") != Some(DERIVED_BY));
-        }
+        snapshot.mark_collector_succeeded(CollectorId::Energy);
     }
 }
 
@@ -552,6 +547,7 @@ fn attach(snapshot: &mut Snapshot, reading: Reading) {
             .metadata
             .insert("core_id".to_owned(), u64::from(core).into());
     }
+    sensor.mark_collector(CollectorId::Energy);
     device.sensors.push(sensor);
 }
 

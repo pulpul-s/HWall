@@ -32,6 +32,10 @@ pub struct SensorRow {
     pub maximum_color: Option<String>,
     pub average_color: Option<String>,
     pub status_color: Option<String>,
+    #[serde(skip)]
+    pub dimmed: bool,
+    #[serde(skip)]
+    pub current_sample: bool,
     pub favorite: bool,
     pub collapsed: bool,
 }
@@ -68,6 +72,8 @@ impl SensorRow {
             maximum_color: None,
             average_color: None,
             status_color: None,
+            dimmed: false,
+            current_sample: false,
             favorite: false,
             collapsed: section.collapsed,
         }
@@ -309,6 +315,8 @@ fn sensor_row(
         maximum_color: presentation.maximum_color,
         average_color: presentation.average_color,
         status_color: presentation.status_color,
+        dimmed: presentation.dimmed,
+        current_sample: sensor.is_current(),
         favorite: context.visibility.is_favorite(sensor_key),
         collapsed: false,
     }

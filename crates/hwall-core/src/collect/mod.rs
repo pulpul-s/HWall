@@ -19,7 +19,7 @@ mod thunderbolt;
 mod usb;
 mod util;
 
-use crate::model::{Snapshot, SnapshotBuilder};
+use crate::model::{CollectorId, Snapshot, SnapshotBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CollectionProfile {
@@ -98,16 +98,23 @@ fn collect_full(builder: &mut SnapshotBuilder, options: &CollectOptions) {
         options.include_sensitive,
     );
     cpu::collect(builder);
+    builder.mark_collector_succeeded(CollectorId::Cpu);
     pci::collect(builder);
     usb::collect(builder, options.include_sensitive);
     block::collect(builder, options.include_sensitive);
+    builder.mark_collector_succeeded(CollectorId::Block);
     nvme::collect(builder, options.include_sensitive);
     network::collect(builder, options);
+    builder.mark_collector_succeeded(CollectorId::Network);
     power::collect(builder, options.include_sensitive);
+    builder.mark_collector_succeeded(CollectorId::Power);
     memory::collect_usage(builder);
+    builder.mark_collector_succeeded(CollectorId::Memory);
     memory::collect(builder);
     thermal::collect(builder);
+    builder.mark_collector_succeeded(CollectorId::Thermal);
     hwmon::collect(builder, options.allow_helper_commands);
+    builder.mark_collector_succeeded(CollectorId::Hwmon);
     gpu::collect(
         builder,
         options.allow_helper_commands,
@@ -126,12 +133,19 @@ fn collect_full(builder: &mut SnapshotBuilder, options: &CollectOptions) {
 
 fn collect_fast(builder: &mut SnapshotBuilder, options: &CollectOptions) {
     cpu::collect_dynamic(builder);
+    builder.mark_collector_succeeded(CollectorId::Cpu);
     memory::collect_usage(builder);
+    builder.mark_collector_succeeded(CollectorId::Memory);
     network::collect_dynamic(builder);
+    builder.mark_collector_succeeded(CollectorId::Network);
     block::collect_dynamic(builder);
+    builder.mark_collector_succeeded(CollectorId::Block);
     power::collect(builder, options.include_sensitive);
+    builder.mark_collector_succeeded(CollectorId::Power);
     thermal::collect(builder);
+    builder.mark_collector_succeeded(CollectorId::Thermal);
     hwmon::collect(builder, options.allow_helper_commands);
+    builder.mark_collector_succeeded(CollectorId::Hwmon);
     gpu::collect(
         builder,
         options.allow_helper_commands,

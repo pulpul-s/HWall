@@ -5,6 +5,7 @@ mod history;
 mod history_chart;
 mod session;
 mod table;
+mod theme;
 mod tray;
 mod ui;
 mod window;
@@ -23,6 +24,7 @@ use hwall_core::{supports_storage_health, Device, DeviceClass, Sensor};
 use session::{Activity, HealthRefreshReason, Session};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use tray::{TrayAction, TrayBridge};
@@ -30,6 +32,26 @@ use ui::restore_scroll_position;
 use window::{ToolbarActions, Ui};
 
 type SharedModel = Rc<RefCell<GuiModel>>;
+
+const STATUS_NOTICE_DURATION: Duration = Duration::from_secs(10);
+
+struct TimedNotice {
+    text: String,
+    expires_at: Instant,
+}
+
+impl TimedNotice {
+    fn new(text: String) -> Self {
+        Self {
+            text,
+            expires_at: Instant::now() + STATUS_NOTICE_DURATION,
+        }
+    }
+
+    fn is_expired(&self, now: Instant) -> bool {
+        self.expires_at <= now
+    }
+}
 
 struct GuiModel {
     settings: AppSettings,
@@ -45,6 +67,35 @@ struct GuiModel {
     next_health_view_check: Instant,
     sensor_query: String,
     hardware_query: String,
+    history_export_directory: Rc<RefCell<PathBuf>>,
+    timed_notice: Option<TimedNotice>,
+}
+
+impl GuiModel {
+    fn set_timed_notice(&mut self, text: String) {
+        self.timed_notice = Some(TimedNotice::new(text));
+    }
+
+    fn expire_timed_notice(&mut self, now: Instant) -> bool {
+        if self
+            .timed_notice
+            .as_ref()
+            .is_some_and(|notice| notice.is_expired(now))
+        {
+            self.timed_notice = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn status_notice(&self, now: Instant) -> &str {
+        self.timed_notice
+            .as_ref()
+            .filter(|notice| !notice.is_expired(now))
+            .map(|notice| notice.text.as_str())
+            .unwrap_or(self.notice.trim())
+    }
 }
 
 fn main() -> glib::ExitCode {
@@ -71,6 +122,7 @@ fn activate(application: &Application) {
 fn build_ui(application: &Application) {
     let settings_store = SettingsStore::discover();
     let initial = settings_store.load();
+    theme::apply(initial.theme);
     let interval = initial.refresh_interval();
     let rediscover = Duration::from_secs(initial.rediscover_seconds.max(5));
     let health_interval = Duration::from_secs(initial.health_interval_seconds.max(60));
@@ -100,6 +152,8 @@ fn build_ui(application: &Application) {
         next_health_view_check: Instant::now(),
         sensor_query: String::new(),
         hardware_query: String::new(),
+        history_export_directory: Rc::new(RefCell::new(default_log_directory())),
+        timed_notice: None,
     }));
 
     connect_actions(&model, &ui, actions);
@@ -174,7 +228,7 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
             borrowed.session.reset_statistics();
             borrowed.notice = "Statistics reset".to_owned();
         }
-        rebuild_rows(&model_for_reset, &ui_for_reset);
+        sync_active_view(&model_for_reset, &ui_for_reset);
     });
 
     let model_for_rediscover = model.clone();
@@ -243,6 +297,7 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
                 let interval = settings.refresh_interval();
                 let history_retention = settings.history_retention();
                 let density = settings.density;
+                let theme_preference = settings.theme;
                 let favorites_only = settings.favorites_only;
                 let placement_requested = settings.plasma_window_placement;
                 let allow_rule_creation = ui_after_apply.window.is_mapped();
@@ -264,6 +319,7 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
                     borrowed.plasma_map_sync_pending = plasma_map_sync_pending;
                     changed
                 };
+                theme::apply(theme_preference);
                 ui_after_apply.table.set_density_class(density);
                 ui_after_apply.favorites_button.set_active(favorites_only);
                 update_plasma_notice(&model_after_apply, placement_notice);
@@ -272,7 +328,7 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
                         "Updating identifying information…".to_owned();
                 }
                 save_settings(&model_after_apply, &ui_after_apply);
-                rebuild_rows(&model_after_apply, &ui_after_apply);
+                sync_active_view(&model_after_apply, &ui_after_apply);
             },
         );
     });
@@ -369,7 +425,7 @@ fn rename_sensor_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
         }
         drop(borrowed);
         save_settings(&model_after_apply, &ui_after_apply);
-        rebuild_rows(&model_after_apply, &ui_after_apply);
+        sync_active_view(&model_after_apply, &ui_after_apply);
     });
 }
 
@@ -438,7 +494,7 @@ fn configure_sensor_alert(model: &SharedModel, ui: &Ui, parent: &gtk::Window, ro
                 .application
                 .withdraw_notification(&format!("hwall-alert:{key}"));
             save_settings(&model_after_apply, &ui_after_apply);
-            rebuild_rows(&model_after_apply, &ui_after_apply);
+            sync_active_view(&model_after_apply, &ui_after_apply);
         },
     );
 }
@@ -673,6 +729,7 @@ fn show_details_for_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
                     history,
                     history_key: key.clone(),
                     default_log_format: log_format,
+                    export_directory: model.borrow().history_export_directory.clone(),
                     read_live: Box::new(read_live),
                     configure_alert: Box::new(move |parent| {
                         configure_sensor_alert(
@@ -687,10 +744,11 @@ fn show_details_for_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
                     }),
                     exported: Box::new(move |result| {
                         let mut borrowed = model_for_export.borrow_mut();
-                        borrowed.notice = match result {
+                        let notice = match result {
                             Ok(path) => format!("History exported to {}", path.display()),
                             Err(error) => format!("History export failed: {error}"),
                         };
+                        borrowed.set_timed_notice(notice);
                         drop(borrowed);
                         update_status(&model_for_export, &ui_for_export);
                     }),
@@ -843,7 +901,7 @@ fn request_visible_storage_health(model: &SharedModel, ui: &Ui, force: bool) {
         return;
     }
     let mut ids = Vec::new();
-    if ui.content_stack.visible_child_name().as_deref() == Some("hardware") {
+    if ui.window.is_mapped() && active_view_is_hardware(ui) {
         ids.extend(
             model
                 .borrow()
@@ -902,7 +960,22 @@ fn connect_view_switching(model: &SharedModel, ui: &Ui) {
         });
 }
 
+fn sync_active_view(model: &SharedModel, ui: &Ui) {
+    if !ui.window.is_mapped() {
+        return;
+    }
+    if active_view_is_hardware(ui) {
+        sync_hardware(model, ui);
+        update_status(model, ui);
+    } else {
+        rebuild_rows(model, ui);
+    }
+}
+
 fn sync_hardware(model: &SharedModel, ui: &Ui) {
+    if !ui.window.is_mapped() {
+        return;
+    }
     let inventory = {
         let borrowed = model.borrow();
         let alert_states = borrowed.alerts.states();
@@ -918,6 +991,15 @@ fn sync_hardware(model: &SharedModel, ui: &Ui) {
 }
 
 fn connect_window_lifecycle(model: &SharedModel, ui: &Ui) {
+    let model_for_map = model.clone();
+    let ui_for_map = ui.clone();
+    ui.window.connect_map(move |_| {
+        process_session_tick(&model_for_map, &ui_for_map, false);
+        sync_active_view(&model_for_map, &ui_for_map);
+        process_session_tick(&model_for_map, &ui_for_map, true);
+        request_visible_storage_health(&model_for_map, &ui_for_map, true);
+    });
+
     let model_for_close = model.clone();
     let ui_for_close = ui.clone();
     ui.window.connect_close_request(move |window| {
@@ -958,7 +1040,7 @@ fn connect_plasma_window_placement(model: &SharedModel, ui: &Ui) {
 }
 
 fn start_tick(model: SharedModel, ui: Ui) {
-    glib::timeout_add_local(Duration::from_millis(16), move || {
+    glib::timeout_add_local(Duration::from_millis(50), move || {
         let tray_actions: Vec<_> = {
             let borrowed = model.borrow();
             borrowed.tray.actions.try_iter().collect()
@@ -969,45 +1051,51 @@ fn start_tick(model: SharedModel, ui: Ui) {
             }
         }
 
-        let session::TickResult {
-            snapshot_changed,
-            telemetry_sample_changed,
-            activity_changed,
-            logging_error,
-            storage_health_changed,
-        } = model.borrow_mut().session.tick();
-        let alert_events = if telemetry_sample_changed {
-            evaluate_alerts(&model)
-        } else {
-            Vec::new()
-        };
-        if snapshot_changed {
-            let identifying_information_pending =
-                model.borrow().session.identifying_information_pending();
-            if !identifying_information_pending {
-                model.borrow_mut().notice.clear();
-            }
-            rebuild_rows(&model, &ui);
-            if telemetry_sample_changed {
-                write_log_sample(&model);
-            }
-        }
-        send_alert_notifications(&ui, alert_events);
-        if let Some(error) = logging_error.as_deref() {
-            let mut borrowed = model.borrow_mut();
-            borrowed.notice = format!("Logging error: {error}");
-            borrowed.session.stop_logging();
-        }
-        if storage_health_changed {
-            sync_hardware(&model, &ui);
-        }
+        process_session_tick(&model, &ui, ui.window.is_mapped());
         request_visible_storage_health(&model, &ui, false);
-        if (!snapshot_changed && activity_changed) || logging_error.is_some() {
-            update_status(&model, &ui);
-        }
-
         glib::ControlFlow::Continue
     });
+}
+
+fn process_session_tick(model: &SharedModel, ui: &Ui, update_presentation: bool) {
+    let session::TickResult {
+        snapshot_changed,
+        telemetry_sample_changed,
+        activity_changed,
+        logging_error,
+        ..
+    } = model.borrow_mut().session.tick();
+    let alert_events = if telemetry_sample_changed {
+        evaluate_alerts(model)
+    } else {
+        Vec::new()
+    };
+    if snapshot_changed {
+        let identifying_information_pending =
+            model.borrow().session.identifying_information_pending();
+        if !identifying_information_pending {
+            model.borrow_mut().notice.clear();
+        }
+        if telemetry_sample_changed {
+            write_log_sample(model);
+        }
+    }
+    send_alert_notifications(ui, alert_events);
+    if let Some(error) = logging_error.as_deref() {
+        let mut borrowed = model.borrow_mut();
+        borrowed.notice = format!("Logging error: {error}");
+        borrowed.session.stop_logging();
+    }
+
+    let timed_notice_expired = model.borrow_mut().expire_timed_notice(Instant::now());
+
+    if update_presentation {
+        if snapshot_changed {
+            sync_active_view(model, ui);
+        } else if activity_changed || logging_error.is_some() || timed_notice_expired {
+            update_status(model, ui);
+        }
+    }
 }
 
 fn evaluate_alerts(model: &SharedModel) -> Vec<AlertEvent> {
@@ -1076,7 +1164,7 @@ fn handle_tray_action(action: TrayAction, model: &SharedModel, ui: &Ui) -> bool 
         TrayAction::ToggleLogging => toggle_logging(model, ui),
         TrayAction::ResetStatistics => {
             model.borrow_mut().session.reset_statistics();
-            rebuild_rows(model, ui);
+            sync_active_view(model, ui);
         }
         TrayAction::Quit => {
             save_settings(model, ui);
@@ -1088,6 +1176,9 @@ fn handle_tray_action(action: TrayAction, model: &SharedModel, ui: &Ui) -> bool 
 }
 
 fn rebuild_rows(model: &SharedModel, ui: &Ui) {
+    if !ui.window.is_mapped() {
+        return;
+    }
     let preserve = ui.table.selected_row().map(|row| row.id);
     let scroll_position = ui.sensor_scroller.vadjustment().value();
     let rows = {
@@ -1116,11 +1207,13 @@ fn rebuild_rows(model: &SharedModel, ui: &Ui) {
         restore_scroll_position(&ui.sensor_scroller, scroll_position);
     }
     model.borrow_mut().visible_sensor_count = visible_sensor_count;
-    sync_hardware(model, ui);
     update_status(model, ui);
 }
 
 fn update_status(model: &SharedModel, ui: &Ui) {
+    if !ui.window.is_mapped() {
+        return;
+    }
     let borrowed = model.borrow();
     let activity = borrowed.session.activity();
     let activity_text = match activity {
@@ -1145,21 +1238,20 @@ fn update_status(model: &SharedModel, ui: &Ui) {
         1 => "  •  1 history recording".to_owned(),
         count => format!("  •  {count} history recordings"),
     };
-    let note = borrowed.notice.trim();
+    let note = borrowed.status_notice(Instant::now());
     let notice = if note.is_empty() {
         String::new()
     } else {
         format!("  •  {note}")
     };
-    let primary_count = if ui.content_stack.visible_child_name().as_deref() == Some("hardware") {
+    let primary_count = if active_view_is_hardware(ui) {
         format!("{} devices", ui.hardware.device_count())
     } else {
         format!("{} sensors", borrowed.visible_sensor_count)
     };
-    ui.status_right.set_text(&format!(
-        "{primary_count}  •  {} samples{logging}{history}{notice}",
-        borrowed.session.sample_rounds(),
-    ));
+    let status = format!("{primary_count}{logging}{history}{notice}");
+    ui.status_right.set_text(&status);
+    ui.status_right.set_tooltip_text(Some(&status));
     ui.pause_button.set_icon_name(if paused {
         "media-playback-start-symbolic"
     } else {

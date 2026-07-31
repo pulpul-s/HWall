@@ -1,6 +1,6 @@
 use super::util::{add_string, add_u64, basename, list_dirs, read_trimmed, read_u64};
 use crate::model::{
-    Device, DeviceClass, Identification, Sensor, SensorKind, SnapshotBuilder, Unit,
+    CollectorId, Device, DeviceClass, Identification, Sensor, SensorKind, SnapshotBuilder, Unit,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -120,6 +120,9 @@ pub(super) fn collect_usage(builder: &mut SnapshotBuilder) {
             "/proc/meminfo",
             Identification::Inferred,
         ));
+    }
+    for sensor in &mut device.sensors {
+        sensor.mark_collector(CollectorId::Memory);
     }
     builder.add_device(device);
 }

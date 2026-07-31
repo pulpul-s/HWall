@@ -5,15 +5,15 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 <br>
 <img width="450" alt="image" src="https://github.com/user-attachments/assets/020ccaeb-3ce4-494c-a99e-04ebcd48b4e6" />
 
-
-
 ## Features
 
 - Live temperatures, fan speeds, voltages, utilization, clocks, storage activity, network rates, and available power readings
 - Hierarchical **Sensors** and **Hardware** views in the GTK application
+- System, light, and dark GTK theme preferences
 - Switchable **Mixed**, **Sensors**, and **Hardware** views in the interactive terminal monitor
-- Current, minimum, maximum, and average values for the active monitoring session
-- Configurable bounded in-memory sensor history with mouse zoom, panning, timestamp inspection, and CSV or JSON Lines export
+- Current, minimum, maximum, average, and sample counts for each sensor in its Details window
+- Clear stale and unavailable states when a live reading can no longer be refreshed
+- Configurable bounded in-memory sensor history with mouse zoom, panning, timestamp inspection, and Save As export to CSV or JSON Lines
 - Per-sensor warning and critical alerts with duration, hysteresis, cooldown, and desktop notifications
 - Hardware inventory for processors, memory, graphics, storage, network, USB, PCI, batteries, firmware, and supported security devices
 - Optional SMART and NVMe health information
@@ -33,7 +33,7 @@ The table below provides examples of common sensor drivers; it is not a complete
 |---|---|---|
 | `nct6775` | Modern Nuvoton Super-I/O chips | Voltages, temperatures, fan RPM, PWM |
 | `it87` | ITE Super-I/O chips | Voltages, temperatures, fan RPM, PWM |
-| `asus-ec-sensors` | Supported ASUS motherboards | Board, chipset and VRM temperatures, extra fans, some voltage/current readings |
+| `asus-ec-sensors` | Supported ASUS motherboards | board, chipset, and VRM temperatures, extra fans, some voltage/current readings |
 | `asus_wmi_sensors` | Older supported ASUS boards | Voltages, temperatures, fans, current and water-cooling headers |
 | `w83627ehf` | Older Winbond/Nuvoton chips | Voltages, temperatures and fans |
 | `f71882fg` | Fintek Super-I/O chips | Voltages, temperatures and fans |
@@ -105,7 +105,6 @@ sudo apt install cargo rustc libgtk-4-dev pkg-config build-essential
 sudo dnf install rust cargo gtk4-devel pkgconf-pkg-config
 ```
 
-
 ## Building
 
 Build the complete workspace:
@@ -139,6 +138,13 @@ Build only the command-line application without GTK dependencies:
 make release-cli
 ```
 
+After staging intended source changes, regenerate the tracked-file checksums and run the full validation suite:
+
+```bash
+make checksums
+make verify
+```
+
 ## Installing
 
 Install both binaries together with the desktop entry, application icon, and AppStream metadata:
@@ -167,7 +173,7 @@ Use `--no-helpers` for sysfs-only collection, `--sensitive` to include identifyi
 
 ## CLI usage
 
-Running `hwall-cli` in a terminal opens the interactive mixed view. When output is redirected, it prints one mixed report instead. Explicit commands remain available:
+Running `hwall-cli` in a terminal opens the interactive (hwall-cli watch) mixed view. Use Tab or Shift-Tab to cycle between Mixed, Sensors, and Hardware, or press 1, 2, or 3 to select a view directly. Use `hwall-cli --help` or `hwall-cli <subcommand> --help` for the complete option list. When output is redirected, it prints one mixed report instead. Explicit commands remain available:
 
 ```bash
 hwall-cli
@@ -184,13 +190,16 @@ Examples:
 hwall-cli sensors --class cpu
 hwall-cli sensors --device nvme --format json
 hwall-cli watch --interval 500ms
-hwall-cli watch --view sensors
-hwall-cli watch --jsonl
+hwall-cli watch --view hardware
+hwall-cli watch --jsonl --interval 1s
 hwall-cli --health report
 hwall-cli --no-helpers report
 ```
 
-The terminal interface starts in the mixed view. Use Tab or Shift-Tab to cycle between Mixed, Sensors, and Hardware, or press 1, 2, or 3 to select a view directly. Use `hwall-cli --help` or `hwall-cli <subcommand> --help` for the complete option list.
+## Additional notes
 
-In the GTK settings, **Show identifying information** enables available serial numbers, UUIDs, WWNs, MAC addresses, and related identifiers after an automatic hardware rediscovery. **Keep sensor history** controls both the global in-memory retention period and the default chart range for newly opened sensor Details windows. The default is 1 minute; the shared limit is 24 hours.
-
+- Sampling intervals are best-effort. External collectors such as sensors and nvidia-smi may take longer than the configured interval, especially at 200 ms. Individual sample intervals may vary because collection time and system scheduling vary, but HWall uses deadline-based timing so the average sampling interval stays close to the configured value whenever the system can sustain it. HWall does not queue delayed samples and instead runs at the fastest sustainable cadence. Very short sampling intervals combined with long history retention can consume substantial CPU and memory.
+- When a live collector temporarily fails, HWall keeps the last known value visible, dims it, and marks it **Stale** with the time of its last successful update. When collection succeeds but a previously known sensor is no longer present, HWall marks it Unavailable until the next full hardware rediscovery confirms whether it has been removed.
+- In the GTK settings, **Theme** can follow the system preference or force light or dark Adwaita styling.
+- **Show identifying information** enables available serial numbers, UUIDs, WWNs, MAC addresses, and related identifiers, then performs a hardware rediscovery.
+- **Keep sensor history** controls both the global in-memory retention period and the default chart range for newly opened sensor Details windows. The default is 1 minute; the shared limit is 24 hours.

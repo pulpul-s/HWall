@@ -1,6 +1,6 @@
 use super::util::{add_string, basename, list_dirs, read_f64, read_trimmed};
 use crate::model::{
-    Device, DeviceClass, Identification, Sensor, SensorKind, SnapshotBuilder, Unit,
+    CollectorId, Device, DeviceClass, Identification, Sensor, SensorKind, SnapshotBuilder, Unit,
 };
 use std::path::Path;
 
@@ -59,6 +59,9 @@ pub(super) fn collect(builder: &mut SnapshotBuilder, include_sensitive: bool) {
 
         for spec in POWER_SUPPLY_SENSORS {
             add_scaled_sensor(&mut device, &path, spec);
+        }
+        for sensor in &mut device.sensors {
+            sensor.mark_collector(CollectorId::Power);
         }
         builder.add_device(device);
     }

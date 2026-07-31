@@ -4,6 +4,7 @@
 //! reset, and suspend-gap handling so CPU, network, storage, and energy-derived
 //! power use identical semantics.
 
+use crate::model::CollectorId;
 use crate::{Device, Identification, Sensor, SensorKind, Snapshot, Unit};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -69,10 +70,13 @@ fn derive_cpu(device: &mut Device, previous: &BTreeMap<String, u64>) {
             device,
             "cpu:0:utilization:total",
             "Total CPU utilization",
-            SensorKind::Utilization,
-            Unit::Percent,
-            utilization,
             "/proc/stat",
+            DerivedReading::new(
+                SensorKind::Utilization,
+                Unit::Percent,
+                utilization,
+                CollectorId::Cpu,
+            ),
         );
     }
 
@@ -99,10 +103,13 @@ fn derive_cpu(device: &mut Device, previous: &BTreeMap<String, u64>) {
             device,
             format!("cpu:0:utilization:logical:{cpu}"),
             format!("CPU {cpu} utilization"),
-            SensorKind::Utilization,
-            Unit::Percent,
-            utilization,
             "/proc/stat",
+            DerivedReading::new(
+                SensorKind::Utilization,
+                Unit::Percent,
+                utilization,
+                CollectorId::Cpu,
+            ),
         );
     }
 }
@@ -158,10 +165,13 @@ fn derive_network(device: &mut Device, previous: &BTreeMap<String, u64>, seconds
             device,
             format!("{}:rate:{id}", device.id),
             label,
-            SensorKind::Throughput,
-            unit,
-            delta as f64 / seconds,
             format!("/sys/class/net/{}/statistics/{key}", network_name(device)),
+            DerivedReading::new(
+                SensorKind::Throughput,
+                unit,
+                delta as f64 / seconds,
+                CollectorId::Network,
+            ),
         );
     }
 }
@@ -217,10 +227,13 @@ fn derive_storage(device: &mut Device, previous: &BTreeMap<String, u64>, elapsed
             device,
             format!("{}:activity:{id}", device.id),
             label,
-            SensorKind::Throughput,
-            unit,
-            delta as f64 * scale / seconds,
             source.clone(),
+            DerivedReading::new(
+                SensorKind::Throughput,
+                unit,
+                delta as f64 * scale / seconds,
+                CollectorId::Block,
+            ),
         );
     }
 
@@ -231,10 +244,13 @@ fn derive_storage(device: &mut Device, previous: &BTreeMap<String, u64>, elapsed
                 device,
                 format!("{}:activity:busy", device.id),
                 "Device utilization",
-                SensorKind::Utilization,
-                Unit::Percent,
-                (io_ms as f64 * 100.0 / elapsed_ms).clamp(0.0, 100.0),
                 source,
+                DerivedReading::new(
+                    SensorKind::Utilization,
+                    Unit::Percent,
+                    (io_ms as f64 * 100.0 / elapsed_ms).clamp(0.0, 100.0),
+                    CollectorId::Block,
+                ),
             );
         }
     }
@@ -266,8 +282,15 @@ fn derive_hwmon_power(device: &mut Device, previous: &BTreeMap<String, u64>, sec
         .collect::<Vec<_>>();
 
     for (id, label, value, source, energy_sensor_id) in derived {
-        let mut sensor =
-            new_derived_sensor(id, label, SensorKind::Power, Unit::Watt, value, source);
+        let mut sensor = new_derived_sensor(
+            id,
+            label,
+            SensorKind::Power,
+            Unit::Watt,
+            value,
+            source,
+            CollectorId::Hwmon,
+        );
         sensor
             .metadata
             .insert("derived_from".to_owned(), energy_sensor_id.into());
@@ -308,19 +331,42 @@ fn counter_delta(device: &Device, previous: &BTreeMap<String, u64>, key: &str) -
     current.checked_sub(previous)
 }
 
+#[derive(Clone, Copy)]
+struct DerivedReading {
+    kind: SensorKind,
+    unit: Unit,
+    value: f64,
+    collector: CollectorId,
+}
+
+impl DerivedReading {
+    fn new(kind: SensorKind, unit: Unit, value: f64, collector: CollectorId) -> Self {
+        Self {
+            kind,
+            unit,
+            value,
+            collector,
+        }
+    }
+}
+
 fn push_derived_sensor(
     device: &mut Device,
     id: impl Into<String>,
     label: impl Into<String>,
-    kind: SensorKind,
-    unit: Unit,
-    value: f64,
     source: impl Into<String>,
+    reading: DerivedReading,
 ) {
-    if value.is_finite() {
-        device
-            .sensors
-            .push(new_derived_sensor(id, label, kind, unit, value, source));
+    if reading.value.is_finite() {
+        device.sensors.push(new_derived_sensor(
+            id,
+            label,
+            reading.kind,
+            reading.unit,
+            reading.value,
+            source,
+            reading.collector,
+        ));
     }
 }
 
@@ -331,6 +377,7 @@ fn new_derived_sensor(
     unit: Unit,
     value: f64,
     source: impl Into<String>,
+    collector: CollectorId,
 ) -> Sensor {
     let mut sensor = Sensor::new(
         id,
@@ -344,6 +391,7 @@ fn new_derived_sensor(
     sensor
         .metadata
         .insert(DERIVED_BY_KEY.to_owned(), DERIVED_BY_VALUE.into());
+    sensor.mark_collector(collector);
     sensor
 }
 

@@ -1,15 +1,27 @@
 use crate::{
-    is_storage_health_property, Identification, PropertyValue, Sensor, SensorKind, SensorStatus,
-    Unit,
+    is_storage_health_property, Identification, PropertyValue, ReadingFreshness, Sensor,
+    SensorKind, SensorStatus, Unit,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn sensor_status_suffix(sensor: &Sensor) -> String {
-    let mut suffix = match sensor.status {
-        SensorStatus::Ok => String::new(),
-        SensorStatus::Alarm => "  ALARM".to_owned(),
-        SensorStatus::Fault => "  FAULT".to_owned(),
-        SensorStatus::Unavailable => "  unavailable".to_owned(),
+    let mut suffix = match sensor.freshness {
+        ReadingFreshness::Stale => sensor.last_updated_unix_ms.map_or_else(
+            || "  STALE".to_owned(),
+            |timestamp| {
+                format!(
+                    "  STALE [last updated {}]",
+                    format_reading_age_compact(timestamp)
+                )
+            },
+        ),
+        ReadingFreshness::Unavailable => "  unavailable".to_owned(),
+        ReadingFreshness::Current => match sensor.status {
+            SensorStatus::Ok => String::new(),
+            SensorStatus::Alarm => "  ALARM".to_owned(),
+            SensorStatus::Fault => "  FAULT".to_owned(),
+            SensorStatus::Unavailable => "  unavailable".to_owned(),
+        },
     };
     match sensor.identification {
         Identification::Unidentified => suffix.push_str("  [unidentified]"),
@@ -32,6 +44,16 @@ fn sample_age_seconds(timestamp_ms: u128) -> u128 {
         .as_millis()
         .saturating_sub(timestamp_ms)
         / 1_000
+}
+
+pub fn format_reading_age_compact(timestamp_ms: u128) -> String {
+    match sample_age_seconds(timestamp_ms) {
+        0 => "just now".to_owned(),
+        seconds @ 1..=59 => format!("{seconds}s ago"),
+        seconds @ 60..=3_599 => format!("{} min ago", seconds / 60),
+        seconds @ 3_600..=86_399 => format!("{} h ago", seconds / 3_600),
+        seconds => format!("{} d ago", seconds / 86_400),
+    }
 }
 
 pub fn format_sample_age_compact(timestamp_ms: u128) -> String {

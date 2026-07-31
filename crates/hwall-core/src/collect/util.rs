@@ -2,9 +2,11 @@ use crate::model::PropertyValue;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub(super) fn read_trimmed(path: impl AsRef<Path>) -> Option<String> {
     fs::read_to_string(path)
@@ -72,16 +74,53 @@ pub(super) fn parse_hex_u16(value: &str) -> Option<u16> {
     u16::from_str_radix(strip_hex_prefix(value.trim()), 16).ok()
 }
 
+pub(super) const HELPER_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const STORAGE_HELPER_TIMEOUT: Duration = Duration::from_secs(60);
+
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_HELPER_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const SYSTEM_COMMAND_DIRS: [&str; 6] = [
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/bin",
+    "/sbin",
+];
+
 pub(super) fn command_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|dir| dir.join(name))
-            .find(|candidate| candidate.is_file())
-    })
+    if name.contains('/') {
+        let candidate = PathBuf::from(name);
+        return candidate.is_file().then_some(candidate);
+    }
+
+    let mut directories = std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    directories.extend(SYSTEM_COMMAND_DIRS.into_iter().map(PathBuf::from));
+    find_command(name, directories)
+}
+
+pub(super) fn system_command_path(name: &str) -> Option<PathBuf> {
+    if name.contains('/') {
+        return None;
+    }
+    find_command(name, SYSTEM_COMMAND_DIRS.into_iter().map(PathBuf::from))
+}
+
+fn find_command(name: &str, directories: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    directories
+        .into_iter()
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 pub(super) fn command_exists(name: &str) -> bool {
     command_path(name).is_some()
+}
+
+pub(super) fn system_command_exists(name: &str) -> bool {
+    system_command_path(name).is_some()
 }
 
 pub(super) fn run_command<I, S>(program: &str, args: I) -> io::Result<Output>
@@ -89,9 +128,26 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_named_command(program, args, HELPER_TIMEOUT)
+}
+
+pub(super) fn run_storage_command<I, S>(program: &str, args: I) -> io::Result<Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_named_command(program, args, STORAGE_HELPER_TIMEOUT)
+}
+
+fn run_named_command<I, S>(program: &str, args: I, timeout: Duration) -> io::Result<Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let program = command_path(program).unwrap_or_else(|| PathBuf::from(program));
     let mut command = Command::new(program);
     command.args(args);
-    run_output(&mut command)
+    run_command_configured(&mut command, timeout)
 }
 
 pub(super) fn run_command_elevated<I, S>(program: &str, args: I) -> io::Result<Output>
@@ -99,23 +155,123 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let Some(program) = command_path(program) else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "helper command was not found",
-        ));
-    };
-    let mut command = Command::new("pkexec");
+    let program = required_system_command(program)?;
+    let pkexec = required_system_command("pkexec")?;
+    let mut command = Command::new(pkexec);
     command.arg(program).args(args);
-    run_output(&mut command)
+    run_output_without_timeout(&mut command)
 }
 
-fn run_output(command: &mut Command) -> io::Result<Output> {
+fn required_system_command(name: &str) -> io::Result<PathBuf> {
+    system_command_path(name).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{name} was not found in a system command directory"),
+        )
+    })
+}
+
+pub(super) fn run_command_configured(
+    command: &mut Command,
+    timeout: Duration,
+) -> io::Result<Output> {
+    configure_output(command);
+    let mut child = command.spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("helper stdout pipe was unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("helper stderr pipe was unavailable"))?;
+    let mut stdout_reader = Some(spawn_output_reader(stdout));
+    let mut stderr_reader = Some(spawn_output_reader(stderr));
+    let started = Instant::now();
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = take_output_reader(&mut stdout_reader);
+                let _ = take_output_reader(&mut stderr_reader);
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("helper command exceeded {timeout:?}"),
+                ));
+            }
+            Ok(None) => {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                thread::sleep(remaining.min(COMMAND_POLL_INTERVAL));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = take_output_reader(&mut stdout_reader);
+                let _ = take_output_reader(&mut stderr_reader);
+                return Err(error);
+            }
+        }
+    };
+
+    Ok(Output {
+        status,
+        stdout: take_output_reader(&mut stdout_reader)?,
+        stderr: take_output_reader(&mut stderr_reader)?,
+    })
+}
+
+fn run_output_without_timeout(command: &mut Command) -> io::Result<Output> {
+    configure_output(command);
+    command.output()
+}
+
+fn configure_output(command: &mut Command) {
     command
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
+        .stdout(Stdio::piped());
+}
+
+fn spawn_output_reader<R>(mut reader: R) -> thread::JoinHandle<io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        let mut exceeded_limit = false;
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            let remaining = MAX_HELPER_OUTPUT_BYTES.saturating_sub(output.len());
+            output.extend_from_slice(&buffer[..read.min(remaining)]);
+            exceeded_limit |= read > remaining;
+        }
+        if exceeded_limit {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "helper output exceeded 16 MiB",
+            ))
+        } else {
+            Ok(output)
+        }
+    })
+}
+
+fn take_output_reader(
+    reader: &mut Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
+) -> io::Result<Vec<u8>> {
+    let reader = reader
+        .take()
+        .ok_or_else(|| io::Error::other("helper output reader was already consumed"))?;
+    reader
+        .join()
+        .map_err(|_| io::Error::other("helper output reader panicked"))?
 }
 
 pub(super) fn add_string(
@@ -323,5 +479,27 @@ mod tests {
             stable_path_token(path),
             "platform-peci-0-0-30-peci-dimmtemp-0"
         );
+    }
+
+    #[test]
+    fn captures_helper_output() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf stdout; printf stderr >&2"]);
+        let output = run_command_configured(&mut command, Duration::from_secs(1)).unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"stdout");
+        assert_eq!(output.stderr, b"stderr");
+    }
+
+    #[test]
+    fn times_out_and_reaps_slow_helpers() {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("2");
+        let started = Instant::now();
+        let error = run_command_configured(&mut command, Duration::from_millis(25)).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }
