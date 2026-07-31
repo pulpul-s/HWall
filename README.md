@@ -1,8 +1,10 @@
 # HWall
 
 HWall is a read-only Linux hardware monitor and inventory application written in Rust. It provides native GTK 4 and terminal interfaces, with a hierarchical sensor view inspired by HWiNFO64. HWall reports information exposed by Linux, firmware, hardware drivers, and installed read-only helper tools.<br>
-<img width="900" alt="image" src="https://github.com/user-attachments/assets/ecdfd7ad-49da-441c-bb73-b100fd43f9a2" /><br>
-<img width="600" alt="image" src="https://github.com/user-attachments/assets/cd4ed69a-fdb3-4bad-a4fd-be9423347e33" />
+<img width="900" alt="image" src="https://github.com/user-attachments/assets/96a8169a-678d-4698-bd3c-90e0193d8d3f" />
+<br>
+<img width="450" alt="image" src="https://github.com/user-attachments/assets/020ccaeb-3ce4-494c-a99e-04ebcd48b4e6" />
+
 
 
 ## Features
