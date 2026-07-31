@@ -18,6 +18,7 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 - Hardware inventory for processors, memory, graphics, storage, network, USB, PCI, batteries, firmware, and supported security devices
 - Optional SMART and NVMe health information
 - Human-readable reports, filtered sensor output, JSON export, JSON Lines streaming, and an interactive terminal monitor
+- Interactive sensor history charts with hover inspection, zooming, panning, selectable time ranges
 
 ## Hardware support
 
