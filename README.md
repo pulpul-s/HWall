@@ -27,6 +27,7 @@ Hardware support depends on the interfaces exposed by the running kernel and the
 
 Motherboard voltages, fan speeds, and board temperatures are available only when the appropriate Linux hwmon driver is loaded. HWall reads sensors already exposed under `/sys/class/hwmon`; it does not load kernel modules or request administrator privileges.
 
+The table below provides examples of common sensor drivers; it is not a complete list.
 | Module | Typical hardware | Common readings |
 |---|---|---|
 | `nct6775` | Modern Nuvoton Super-I/O chips | Voltages, temperatures, fan RPM, PWM |
