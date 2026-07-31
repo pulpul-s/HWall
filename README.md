@@ -21,7 +21,7 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 
 ## Hardware support
 
-Hardware support depends on the interfaces exposed by the running kernel and the installed drivers. Missing readings are omitted rather than guessed.
+Hardware support depends on the interfaces exposed by the running kernel and the installed drivers.
 
 ### Motherboard sensor drivers
 
