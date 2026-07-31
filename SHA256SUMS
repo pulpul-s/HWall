@@ -38,7 +38,7 @@ a3a7c8cb3e55326fb250091a91af65528c273866e0a3794a6c5141f9a543d858  crates/hwall-c
 b075cd577292b50bafdc397295451c35f1aec58c8ae36ea51bdf95dad6aa5ebc  crates/hwall-core/src/collect/dmi.rs
 461a45fd0e2802182974099d2e6424d98c3d12d4b44ca6c3001200f390cd00f1  crates/hwall-core/src/collect/energy.rs
 348eea3956419571ad33b99b2462c8d13c9b81768735169c9fd18d984a86151a  crates/hwall-core/src/collect/gpu.rs
-9a68776ccee76591e174f9aeb5319a8adc8119623c1c6de91ef57ae1a7c0b47a  crates/hwall-core/src/collect/hwmon.rs
+ffecaf36c3efdce5144923c1271f2f98aacf9ba29bd0cb1616df96c60957d56d  crates/hwall-core/src/collect/hwmon.rs
 eab54bbd2e4634aa0186d199a71b436c78e801518ae16f66dd1f3b5b4a3fea90  crates/hwall-core/src/collect/memory.rs
 9aa24a044d13014d88fececa26f26391282fc09e94ce7b71a97819a5091fb525  crates/hwall-core/src/collect/mod.rs
 930ceb1a7964857a5b66d6bd65717b52221be4f6dd506b4f166f1216bca9d1d7  crates/hwall-core/src/collect/network.rs

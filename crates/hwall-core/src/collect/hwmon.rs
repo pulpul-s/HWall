@@ -185,11 +185,14 @@ struct SensorSpec {
 
 impl SensorSpec {
     fn from_filename(filename: &str) -> Option<Self> {
-        let (base, suffix, is_average) = if let Some(base) = filename.strip_suffix("_input") {
-            (base, "input", false)
+        let (base, is_average) = if let Some(base) = filename.strip_suffix("_input") {
+            (base, false)
+        } else if let Some(base) = filename.strip_suffix("_average") {
+            (base, true)
+        } else if is_pwm_attribute(filename) {
+            (filename, false)
         } else {
-            let base = filename.strip_suffix("_average")?;
-            (base, "average", true)
+            return None;
         };
         let prefix = base
             .chars()
@@ -202,6 +205,7 @@ impl SensorSpec {
             "power" => (SensorKind::Power, Unit::Watt, 1_000_000.0),
             "energy" => (SensorKind::Energy, Unit::Joule, 1_000_000.0),
             "fan" => (SensorKind::Fan, Unit::Rpm, 1.0),
+            "pwm" => (SensorKind::Fan, Unit::Percent, 255.0 / 100.0),
             "freq" => (SensorKind::Frequency, Unit::Hertz, 1.0),
             "humidity" => (SensorKind::Humidity, Unit::Percent, 1_000.0),
             "intrusion" => (SensorKind::Boolean, Unit::Boolean, 1.0),
@@ -209,7 +213,7 @@ impl SensorSpec {
         };
         Some(Self {
             base: base.to_owned(),
-            metric_id: format!("{base}_{suffix}"),
+            metric_id: filename.to_owned(),
             kind,
             unit,
             divisor,
@@ -217,6 +221,12 @@ impl SensorSpec {
             channel: channel_number(base),
         })
     }
+}
+
+fn is_pwm_attribute(filename: &str) -> bool {
+    filename
+        .strip_prefix("pwm")
+        .is_some_and(|number| !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 fn channel_number(base: &str) -> Option<u32> {
@@ -269,6 +279,7 @@ fn resolve_label(
         "power" => format!("Power {number}"),
         "energy" => format!("Energy {number}"),
         "fan" => format!("Fan {number}"),
+        "pwm" => format!("PWM {number}"),
         "freq" => format!("Frequency {number}"),
         "humidity" => format!("Humidity {number}"),
         "intrusion" => format!("Intrusion {number}"),
@@ -448,6 +459,25 @@ mod tests {
         assert_eq!(temp.kind, SensorKind::Temperature);
         assert_eq!(temp.divisor, 1_000.0);
         assert!(SensorSpec::from_filename("temp2_label").is_none());
+    }
+
+    #[test]
+    fn recognizes_pwm_duty_cycles() {
+        let pwm = SensorSpec::from_filename("pwm3").unwrap();
+        assert_eq!(pwm.kind, SensorKind::Fan);
+        assert_eq!(pwm.unit, Unit::Percent);
+        assert_eq!(pwm.channel, Some(3));
+        assert_eq!(pwm.metric_id, "pwm3");
+        assert!((51.0 / pwm.divisor - 20.0).abs() < 0.000_001);
+        assert!((255.0 / pwm.divisor - 100.0).abs() < 0.000_001);
+        assert!(SensorSpec::from_filename("pwm3_enable").is_none());
+        assert!(SensorSpec::from_filename("pwm3_mode").is_none());
+
+        let (label, identification) =
+            resolve_label(Path::new("/definitely/not/a/real/hwmon"), &pwm, None, None);
+
+        assert_eq!(label, "PWM 3");
+        assert_eq!(identification, Identification::Unidentified);
     }
 
     #[test]
