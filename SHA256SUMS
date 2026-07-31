@@ -1,17 +1,6 @@
 34e1c6ebdc29e345205d715850dd7939fc8d3f8232a65f7e2eca71b12b88b398  .gitignore
 c07c26017010c05822ea462ceedeb8c64e184ef295fd5e0859c4ecab8c4fb4eb  Cargo.lock
 7a953e03cfdf547eec1927704ffb2be205b5d8c1907522f753bec43a2dbae0f2  Cargo.toml
-e8baefef24e8610ece9bfe524ff776f39a3dacd5ea1daed1d7944e8ce5bd2faa  HWall-main-1.0.1-accurate-sampling-history.patch
-d2e772b9bb1d12eb100271116ceb8840c5487cce0debd0143d4b63a4268478a7  HWall-main-1.0.1-interactive-history-chart-reviewed.patch
-cedade43cbc184998a4fcebd2386bcef178050c0b4af1910773aa60a46d7797b  HWall-main-1.0.1-interactive-history-chart.patch
-2f269552af218ca4a204aee291c4b43a80679af9a6c5078d28572c03a1822ec6  HWall-main-1.0.1-mixed-interval-chart-continuity.patch
-11e3db2798b64148766f84c7853abdfbba0d579ebe0e5fbf6665e86d73353229  HWall-main-1.0.1-three-patch-cleanup.patch
-67de9f53930b2f6ad4b963fde66a713fe459970a590cc1df666756dd43104391  HWall-main-1.0.2-direct-startup-completion.patch
-6f649c7699bc7fa880379af6966d4a2daadfa0ee1e82b94fe99c678d7de8d7f3  HWall-main-1.0.2-disable-startup-feedback-cleanup.patch
-d694881ae545a7f51ba585980b6f7672c7de67500da49a7c7a5c48a5458a78f0  HWall-main-1.0.2-hidden-startup-notification-clippy-fix.patch
-7c913cf80174a61ba9b1ca36fb5e70a346eae40b6ef722bb662392de2ac76c66  HWall-main-1.0.2-hidden-startup-notification.patch
-ea295af3846a0b0540924cbb1c2830686b7da9a2a32ef04b9be6a4e7d3029dc9  HWall-main-1.0.2-present-once-then-hide.patch
-567a8a691609374312038a1ae02c06db7676127e71ff89d9f3be72d22d142c7d  HWall-main-1.0.2-set-wayland-startup-id.patch
 4bcbe2433429d267db8ad6b470333b1fcf5e16086904158ed63da42d623e5a19  Makefile
 edfeb4b191abd53de2fac5522d94c1e6c585b192b52a07dda7ac2c21a1bcbc00  README.md
 99edafc5e6771b8a1d6a2f88346c3ca2b0232d6686f3f875c0f219dd2d7da125  crates/hwall-app/Cargo.toml
