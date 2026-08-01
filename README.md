@@ -8,17 +8,17 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 ## Features
 
 - Live temperatures, fan speeds, voltages, utilization, clocks, storage activity, network rates, and available power readings
+- APERF/MPERF-derived average and per-logical-CPU effective clocks on supported x86 systems
 - Hierarchical **Sensors** and **Hardware** views in the GTK application
 - System, light, and dark GTK theme preferences
 - Switchable **Mixed**, **Sensors**, and **Hardware** views in the interactive terminal monitor
 - Current, minimum, maximum, average, and sample counts for each sensor in its Details window
-- Clear stale and unavailable states when a live reading can no longer be refreshed
-- Configurable bounded in-memory sensor history with mouse zoom, panning, timestamp inspection, and Save As export to CSV or JSON Lines
+- Clear stale, unavailable, and offline states when a live reading can no longer be refreshed
+- Configurable bounded in-memory sensor history with interactive charts, hover inspection, zooming, panning, selectable time ranges, timestamp inspection, and Save As export to CSV or JSON Lines
 - Per-sensor warning and critical alerts with duration, hysteresis, cooldown, and desktop notifications
 - Hardware inventory for processors, memory, graphics, storage, network, USB, PCI, batteries, firmware, and supported security devices
 - Optional SMART and NVMe health information
 - Human-readable reports, filtered sensor output, JSON export, JSON Lines streaming, and an interactive terminal monitor
-- Interactive sensor history charts with hover inspection, zooming, panning, selectable time ranges
 
 ## Hardware support
 
@@ -60,7 +60,6 @@ sudo sysctl kernel.perf_event_paranoid=0
 
 This permits local users to perform system-wide performance monitoring. Review the Linux kernel [`perf_event_paranoid` sysctl guide](https://docs.kernel.org/admin-guide/sysctl/kernel.html#perf-event-paranoid) and enable it only when that access is acceptable.
 
-CPU package power represents the overall processor-package domain. CPU cores power represents only the execution-core domain and must not be added to package power. Per-core power is shown only when the processor and kernel provide physical-core energy counters.
 
 ### Optional runtime helpers
 
@@ -188,6 +187,7 @@ Examples:
 
 ```bash
 hwall-cli sensors --class cpu
+hwall-cli sensors --class cpu --kind effective-clock
 hwall-cli sensors --device nvme --format json
 hwall-cli watch --interval 500ms
 hwall-cli watch --view hardware
@@ -200,6 +200,16 @@ hwall-cli --no-helpers report
 
 - Sampling intervals are best-effort. External collectors such as sensors and nvidia-smi may take longer than the configured interval, especially at 200 ms. Individual sample intervals may vary because collection time and system scheduling vary, but HWall uses deadline-based timing so the average sampling interval stays close to the configured value whenever the system can sustain it. HWall does not queue delayed samples and instead runs at the fastest sustainable cadence. Very short sampling intervals combined with long history retention can consume substantial CPU and memory.
 - When a live collector temporarily fails, HWall keeps the last known value visible, dims it, and marks it **Stale** with the time of its last successful update. When collection succeeds but a previously known sensor is no longer present, HWall marks it Unavailable until the next full hardware rediscovery confirms whether it has been removed.
+- On supported x86 systems, HWall can show APERF/MPERF-derived effective clocks, including idle time, under **Effective clocks**. They require two samples and may be unavailable because of hardware, kernel, virtualization, perf permissions, or open-file limits.
+- CPU package power represents the overall processor-package domain. CPU cores power represents only the execution-core domain and must not be added to package power. Per-core power is shown only when the processor and kernel provide physical-core energy counters.
 - In the GTK settings, **Theme** can follow the system preference or force light or dark Adwaita styling.
 - **Show identifying information** enables available serial numbers, UUIDs, WWNs, MAC addresses, and related identifiers, then performs a hardware rediscovery.
 - **Keep sensor history** controls both the global in-memory retention period and the default chart range for newly opened sensor Details windows. The default is 1 minute; the shared limit is 24 hours.
+
+### Hardware monitoring notice
+
+HWall reads kernel-exposed sensor values through interfaces such as hwmon and does not directly access embedded-controller registers. Some kernel drivers may query underlying firmware or hardware when those sensor attributes are read. For example, the Linux ASUS EC sensor driver reads embedded-controller registers while coordinating access through an ACPI mutex.
+
+Hardware and firmware implementations vary. Avoid running multiple low-level hardware-monitoring applications simultaneously. If monitoring causes unusual latency, erratic readings, freezes, or other instability, stop HWall and other monitoring tools before troubleshooting.
+
+HWall cannot guarantee the accuracy of reported values or compatibility with every system and is used at your own risk.

@@ -80,6 +80,7 @@ fn sensor_status(sensor: &Sensor, rule: Option<&AlertRule>, state: AlertState) -
             );
         }
         ReadingFreshness::Unavailable => return "Unavailable".to_owned(),
+        ReadingFreshness::Offline => return "Offline".to_owned(),
         ReadingFreshness::Current => {}
     }
     match sensor.status {
@@ -147,6 +148,15 @@ mod tests {
         let presentation = present_sensor(&unavailable, None, None, AlertState::Suspended);
         assert!(presentation.dimmed);
         assert_eq!(presentation.status, "Unavailable");
+    }
+
+    #[test]
+    fn offline_reading_is_dimmed() {
+        let mut offline = sensor(42.0);
+        offline.freshness = ReadingFreshness::Offline;
+        let presentation = present_sensor(&offline, None, None, AlertState::Suspended);
+        assert!(presentation.dimmed);
+        assert_eq!(presentation.status, "Offline");
     }
 
     #[test]

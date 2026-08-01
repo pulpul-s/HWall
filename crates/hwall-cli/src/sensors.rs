@@ -103,6 +103,7 @@ enum SensorKindFilter {
     Energy,
     Fan,
     Frequency,
+    EffectiveClock,
     Throughput,
     Utilization,
     Capacity,
@@ -122,6 +123,7 @@ impl From<SensorKindFilter> for SensorKind {
             SensorKindFilter::Energy => Self::Energy,
             SensorKindFilter::Fan => Self::Fan,
             SensorKindFilter::Frequency => Self::Frequency,
+            SensorKindFilter::EffectiveClock => Self::EffectiveClock,
             SensorKindFilter::Throughput => Self::Throughput,
             SensorKindFilter::Utilization => Self::Utilization,
             SensorKindFilter::Capacity => Self::Capacity,
@@ -140,12 +142,14 @@ enum SensorStatusFilter {
     Fault,
     Stale,
     Unavailable,
+    Offline,
 }
 
 impl SensorStatusFilter {
     fn matches(self, sensor: &Sensor) -> bool {
         match self {
             Self::Stale => sensor.freshness == ReadingFreshness::Stale,
+            Self::Offline => sensor.freshness == ReadingFreshness::Offline,
             Self::Unavailable => {
                 sensor.freshness == ReadingFreshness::Unavailable
                     || (sensor.is_current() && sensor.status == SensorStatus::Unavailable)
@@ -375,6 +379,7 @@ fn status_name(record: &Record<'_>) -> String {
             },
         ),
         ReadingFreshness::Unavailable => "Unavailable".to_owned(),
+        ReadingFreshness::Offline => "Offline".to_owned(),
         ReadingFreshness::Current if record.limits_unconfigured => {
             "Limits not configured".to_owned()
         }
@@ -386,6 +391,7 @@ fn status_key(record: &Record<'_>) -> &'static str {
     match record.freshness {
         ReadingFreshness::Stale => "stale",
         ReadingFreshness::Unavailable => "unavailable",
+        ReadingFreshness::Offline => "offline",
         ReadingFreshness::Current if record.limits_unconfigured => "limits_not_configured",
         ReadingFreshness::Current => record.status.as_str(),
     }
@@ -421,6 +427,22 @@ mod tests {
         sensor.freshness = ReadingFreshness::Stale;
         assert!(SensorStatusFilter::Stale.matches(&sensor));
         assert!(!SensorStatusFilter::Ok.matches(&sensor));
+    }
+
+    #[test]
+    fn offline_status_filter_matches_freshness() {
+        let mut sensor = Sensor::new(
+            "cpu:0:effective_clock:logical:1",
+            "CPU 1 effective clock",
+            SensorKind::EffectiveClock,
+            Unit::Hertz,
+            Some(42_000_000.0),
+            "/test",
+            hwall_core::Identification::Inferred,
+        );
+        sensor.freshness = ReadingFreshness::Offline;
+        assert!(SensorStatusFilter::Offline.matches(&sensor));
+        assert!(!SensorStatusFilter::Unavailable.matches(&sensor));
     }
 
     #[test]

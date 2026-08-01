@@ -1037,7 +1037,7 @@ mod tests {
         assert_eq!(inventory.device_count(), 1);
         let device = inventory.device("cpu:0").expect("CPU device");
         assert_eq!(device.category, HardwareCategoryKind::Processor);
-        assert!(device.matches("3.500 ghz"));
+        assert!(device.matches("3500.0 mhz"));
         let identity = device
             .sections
             .iter()

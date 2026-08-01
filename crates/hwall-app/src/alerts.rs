@@ -400,6 +400,7 @@ pub fn alert_direction(kind: SensorKind) -> AlertDirection {
         SensorKind::Voltage
         | SensorKind::Current
         | SensorKind::Frequency
+        | SensorKind::EffectiveClock
         | SensorKind::Capacity
         | SensorKind::Humidity
         | SensorKind::Counter

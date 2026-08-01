@@ -16,6 +16,7 @@ pub(super) fn sensor_status_suffix(sensor: &Sensor) -> String {
             },
         ),
         ReadingFreshness::Unavailable => "  unavailable".to_owned(),
+        ReadingFreshness::Offline => "  offline".to_owned(),
         ReadingFreshness::Current => match sensor.status {
             SensorStatus::Ok => String::new(),
             SensorStatus::Alarm => "  ALARM".to_owned(),
@@ -217,6 +218,7 @@ pub fn sensor_kind_name(kind: SensorKind) -> &'static str {
         SensorKind::Energy => "Energy",
         SensorKind::Fan => "Fans",
         SensorKind::Frequency => "Clocks",
+        SensorKind::EffectiveClock => "Effective clocks",
         SensorKind::Throughput => "Throughput",
         SensorKind::Utilization => "Utilization",
         SensorKind::Capacity => "Capacity",
@@ -345,14 +347,15 @@ pub fn format_value(value: f64, unit: &Unit) -> String {
 }
 
 pub(super) fn format_frequency(value: f64) -> String {
-    if value >= 1_000_000_000.0 {
-        format!("{:.3} GHz", value / 1_000_000_000.0)
-    } else if value >= 1_000_000.0 {
-        format!("{:.1} MHz", value / 1_000_000.0)
-    } else if value >= 1_000.0 {
-        format!("{:.1} kHz", value / 1_000.0)
+    let megahertz = value / 1_000_000.0;
+    if value == 0.0 {
+        "0.0 MHz".to_owned()
+    } else if value > 0.0 && megahertz < 0.01 {
+        "<0.01 MHz".to_owned()
+    } else if megahertz < 0.1 {
+        format!("{megahertz:.2} MHz")
     } else {
-        format!("{value:.0} Hz")
+        format!("{megahertz:.1} MHz")
     }
 }
 
@@ -431,5 +434,28 @@ fn format_float(value: f64) -> String {
         format!("{value:.0}")
     } else {
         format!("{value:.3}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_frequency;
+
+    #[test]
+    fn frequencies_use_fixed_megahertz_units() {
+        assert_eq!(format_frequency(5_213_440_000.0), "5213.4 MHz");
+        assert_eq!(format_frequency(4_200_000_000.0), "4200.0 MHz");
+        assert_eq!(format_frequency(541_060_000.0), "541.1 MHz");
+        assert_eq!(format_frequency(2_184_000.0), "2.2 MHz");
+        assert_eq!(format_frequency(842_000.0), "0.8 MHz");
+    }
+
+    #[test]
+    fn tiny_positive_frequencies_remain_distinct_from_zero() {
+        assert_eq!(format_frequency(94_000.0), "0.09 MHz");
+        assert_eq!(format_frequency(43_000.0), "0.04 MHz");
+        assert_eq!(format_frequency(12_000.0), "0.01 MHz");
+        assert_eq!(format_frequency(6_000.0), "<0.01 MHz");
+        assert_eq!(format_frequency(0.0), "0.0 MHz");
     }
 }

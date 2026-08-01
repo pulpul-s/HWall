@@ -78,6 +78,7 @@ pub enum SensorKind {
     Energy,
     Fan,
     Frequency,
+    EffectiveClock,
     Throughput,
     Utilization,
     Capacity,
@@ -97,6 +98,7 @@ impl SensorKind {
             Self::Energy => "energy",
             Self::Fan => "fan",
             Self::Frequency => "frequency",
+            Self::EffectiveClock => "effective_clock",
             Self::Throughput => "throughput",
             Self::Utilization => "utilization",
             Self::Capacity => "capacity",
@@ -172,6 +174,7 @@ pub enum ReadingFreshness {
     Current,
     Stale,
     Unavailable,
+    Offline,
 }
 
 impl ReadingFreshness {
@@ -180,6 +183,7 @@ impl ReadingFreshness {
             Self::Current => "current",
             Self::Stale => "stale",
             Self::Unavailable => "unavailable",
+            Self::Offline => "offline",
         }
     }
 
@@ -201,6 +205,7 @@ pub(crate) enum CollectorId {
     Drm,
     NvidiaSmi,
     Energy,
+    EffectiveClock,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -694,7 +699,7 @@ impl Snapshot {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64", test))]
     pub(crate) fn mark_collector_failed(&mut self, collector: CollectorId) {
         self.successful_collectors.remove(&collector);
         self.failed_collectors.insert(collector);

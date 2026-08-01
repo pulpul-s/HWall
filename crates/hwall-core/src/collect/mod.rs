@@ -1,6 +1,7 @@
 mod block;
 mod cpu;
 mod dmi;
+pub(crate) mod effective_clock;
 pub(crate) mod energy;
 mod gpu;
 mod hwmon;

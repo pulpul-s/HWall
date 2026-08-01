@@ -4,6 +4,7 @@
 //! worker threads. Terminal and GUI event loops can consume completed snapshots
 //! without blocking input.
 
+use crate::collect::effective_clock::EffectiveClockCollector;
 use crate::collect::energy::EnergyCollector;
 use crate::collect::{
     collect_snapshot, collect_storage_health_targets, reconcile_snapshot, storage_health_target,
@@ -35,6 +36,7 @@ pub struct MonitorCollector {
     last_health: Option<Instant>,
     telemetry: TelemetryDeriver,
     energy: EnergyCollector,
+    effective_clocks: EffectiveClockCollector,
     persistent_warnings: Vec<String>,
 }
 
@@ -48,6 +50,7 @@ impl MonitorCollector {
         let storage_health_enabled = storage_health_requested && full_options.allow_helper_commands;
         full_options.include_storage_health = false;
         let mut energy = EnergyCollector::new();
+        let mut effective_clocks = EffectiveClockCollector::new();
         let mut raw_base = collect_snapshot(&full_options);
         let mut persistent_warnings = Vec::new();
         if storage_health_requested && !storage_health_enabled {
@@ -56,6 +59,7 @@ impl MonitorCollector {
             persistent_warnings.push(warning);
         }
         energy.sample(&mut raw_base);
+        effective_clocks.sample(&mut raw_base, false);
         let mut telemetry = TelemetryDeriver::default();
         let mut base = telemetry.apply(raw_base);
         let observed = sensor_ids(&base);
@@ -77,6 +81,7 @@ impl MonitorCollector {
             last_health: None,
             telemetry,
             energy,
+            effective_clocks,
             persistent_warnings,
         }
     }
@@ -105,6 +110,7 @@ impl MonitorCollector {
             self.energy.refresh_sources();
             let mut refreshed = collect_snapshot(&self.full_options);
             self.energy.sample(&mut refreshed);
+            self.effective_clocks.sample(&mut refreshed, true);
             discard_degraded_libsensors_readings(&previous, &mut refreshed);
             merge_storage_health_cache(&previous, &mut refreshed);
             let mut derived = self.telemetry.apply(refreshed);
@@ -118,6 +124,7 @@ impl MonitorCollector {
 
         let mut dynamic = collect_snapshot(&self.fast_options);
         self.energy.sample(&mut dynamic);
+        self.effective_clocks.sample(&mut dynamic, false);
         discard_degraded_libsensors_readings(&previous, &mut dynamic);
         let mut observed = sensor_ids(&dynamic);
 
@@ -648,6 +655,11 @@ fn missing_freshness(sensor: &Sensor, current: &Snapshot) -> ReadingFreshness {
     {
         return ReadingFreshness::Stale;
     }
+    if sensor.collector == Some(CollectorId::EffectiveClock)
+        && current.collector_succeeded(CollectorId::EffectiveClock)
+    {
+        return ReadingFreshness::Unavailable;
+    }
     if source_still_present(&sensor.source) {
         return ReadingFreshness::Stale;
     }
@@ -914,6 +926,30 @@ mod tests {
 
         let mut rediscovered = Snapshot::new();
         rediscovered.mark_collector_succeeded(CollectorId::Hwmon);
+        let observed = sensor_ids(&rediscovered);
+        reconcile_missing_readings(&previous, &mut rediscovered, &observed, false);
+        assert!(rediscovered.devices.is_empty());
+    }
+
+    #[test]
+    fn missing_effective_clock_is_unavailable_despite_pmu_source() {
+        let previous = snapshot_with_sensor(dynamic_sensor(
+            "cpu:0:effective_clock:logical:1",
+            "/sys/bus/event_source/devices/msr/events/aperf",
+            CollectorId::EffectiveClock,
+        ));
+        let mut current = Snapshot::new();
+        current.mark_collector_succeeded(CollectorId::EffectiveClock);
+
+        let observed = sensor_ids(&current);
+        reconcile_missing_readings(&previous, &mut current, &observed, true);
+        assert_eq!(
+            current.devices[0].sensors[0].freshness,
+            ReadingFreshness::Unavailable
+        );
+
+        let mut rediscovered = Snapshot::new();
+        rediscovered.mark_collector_succeeded(CollectorId::EffectiveClock);
         let observed = sensor_ids(&rediscovered);
         reconcile_missing_readings(&previous, &mut rediscovered, &observed, false);
         assert!(rediscovered.devices.is_empty());
