@@ -25,6 +25,7 @@ a3a7c8cb3e55326fb250091a91af65528c273866e0a3794a6c5141f9a543d858  crates/hwall-c
 9c5e42fb88016af4e9e79bd775cec789768829d69c4df8ce983a680a95a58067  crates/hwall-core/src/collect/block.rs
 1f0e8641b3c4b00dfdd8691ab2bfac3e90eb0a36902793e1fc4c0e880b719379  crates/hwall-core/src/collect/cpu.rs
 bc931f42dc229c2186f2b4890e06f5c50a7f830d5b5cd7196460a296562aa45d  crates/hwall-core/src/collect/dmi.rs
+8f77d14d27c344ed9c012bb3e9f3b5faf1b96864361405b73a9ec687fb6376ff  crates/hwall-core/src/collect/effective_clock.rs
 3c37f60e1d0937975850b40e3ceef3f19ca154b10388ffba10b19eb1276d14e2  crates/hwall-core/src/collect/energy.rs
 aa84b3b8d8a3674f382b63fbec04feaaf2557196f427ff913b814c99f1016685  crates/hwall-core/src/collect/gpu.rs
 38f1cd18dc79b931d7df3d9afa231dee6035c77f7be01bbebf20aaa71b3312fc  crates/hwall-core/src/collect/hwmon.rs
