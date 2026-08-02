@@ -62,7 +62,7 @@ pub(crate) fn show_settings(
     on_apply: impl Fn(AppSettings) + 'static,
 ) {
     let dialog = Dialog::builder()
-        .title("HWall Settings")
+        .title(format!("HWall {} Settings", env!("CARGO_PKG_VERSION")))
         .transient_for(parent)
         .modal(true)
         .use_header_bar(1)
