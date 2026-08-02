@@ -364,7 +364,7 @@ fn project_device(
     push_identity(
         &mut sections,
         "bus_address",
-        "Bus address",
+        bus_address_label(device),
         device.bus_address.as_deref(),
     );
     if category == HardwareCategoryKind::Storage
@@ -596,6 +596,14 @@ fn push_identity(
             label: label.to_owned(),
             value: value.to_owned(),
         });
+}
+
+fn bus_address_label(device: &Device) -> &'static str {
+    if device.class == DeviceClass::Network {
+        "Interface"
+    } else {
+        "Bus address"
+    }
 }
 
 fn category_for(device: &Device) -> HardwareCategoryKind {
@@ -1096,6 +1104,8 @@ mod tests {
         assert_eq!(device_subtitle(&motherboard), "Motherboard");
         assert_eq!(device_subtitle(&storage), "Example vendor");
         assert_eq!(device_subtitle(&network), "igc · eno1");
+        assert_eq!(bus_address_label(&storage), "Bus address");
+        assert_eq!(bus_address_label(&network), "Interface");
     }
 
     #[test]

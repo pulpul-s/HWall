@@ -16,7 +16,11 @@ pub(super) fn collect(builder: &mut SnapshotBuilder, options: &CollectOptions) {
         );
         device.bus_address = Some(name.clone());
         device.driver = symlink_basename(path.join("device/driver"));
-        add_string(&mut device.properties, "network_kind", Some(kind.to_owned()));
+        add_string(
+            &mut device.properties,
+            "network_kind",
+            Some(kind.to_owned()),
+        );
         add_string(
             &mut device.properties,
             "pci_address",
@@ -55,14 +59,8 @@ pub(super) fn collect(builder: &mut SnapshotBuilder, options: &CollectOptions) {
 
 pub(super) fn collect_dynamic(builder: &mut SnapshotBuilder) {
     for (path, name) in interfaces() {
-        let kind = interface_kind(&path, &name);
-        let mut device = Device::new(
-            format!("net:{name}"),
-            DeviceClass::Network,
-            interface_kind_name(kind),
-        );
+        let mut device = Device::new(format!("net:{name}"), DeviceClass::Network, name.clone());
         device.bus_address = Some(name);
-        add_string(&mut device.properties, "network_kind", Some(kind.to_owned()));
         add_dynamic_properties(&mut device, &path);
         builder.add_device(device);
     }
@@ -104,9 +102,7 @@ fn interface_kind(path: &Path, name: &str) -> &'static str {
     let lowered = name.to_ascii_lowercase();
     if lowered.starts_with("veth") {
         "veth"
-    } else if lowered.starts_with("wg")
-        || lowered.contains("-wg")
-        || lowered.contains("wireguard")
+    } else if lowered.starts_with("wg") || lowered.contains("-wg") || lowered.contains("wireguard")
     {
         "wireguard"
     } else if lowered.starts_with("tap") {

@@ -19,11 +19,31 @@ pub(super) fn apply(snapshot: &mut Snapshot) {
 }
 
 fn reconcile_network_identity(snapshot: &mut Snapshot) {
+    let pending_addresses = snapshot
+        .devices
+        .iter()
+        .filter(|device| device.class == DeviceClass::Network)
+        .filter(|device| {
+            device.property_str("pci_address").is_some()
+                && device.property_str("vendor_id").is_none()
+                && device.property_str("class_code").is_none()
+        })
+        .filter_map(|device| device.property_str("pci_address").map(str::to_owned))
+        .collect::<BTreeSet<_>>();
+    if pending_addresses.is_empty() {
+        return;
+    }
+
     let pci_devices = snapshot
         .devices
         .iter()
         .filter(|device| device.class == DeviceClass::Pci)
-        .filter_map(|device| Some((device.bus_address.clone()?, device.clone())))
+        .filter_map(|device| {
+            let address = device.bus_address.as_deref()?;
+            pending_addresses
+                .contains(address)
+                .then(|| (address.to_owned(), NetworkPciIdentity::from(device)))
+        })
         .collect::<BTreeMap<_, _>>();
 
     for device in &mut snapshot.devices {
@@ -40,31 +60,62 @@ fn reconcile_network_identity(snapshot: &mut Snapshot) {
 
         device.vendor = pci.vendor.clone();
         device.model = pci.model.clone();
-        for key in [
+        if device.driver.is_none() {
+            device.driver = pci.driver.clone();
+        }
+        for (key, value) in &pci.properties {
+            device
+                .properties
+                .entry((*key).to_owned())
+                .or_insert_with(|| value.clone());
+        }
+
+        if let Some(name) =
+            network_hardware_name(pci.vendor.as_deref(), pci.model.as_deref(), kind.as_deref())
+        {
+            device.name = name;
+        }
+    }
+}
+
+struct NetworkPciIdentity {
+    vendor: Option<String>,
+    model: Option<String>,
+    driver: Option<String>,
+    properties: BTreeMap<&'static str, PropertyValue>,
+}
+
+impl From<&Device> for NetworkPciIdentity {
+    fn from(device: &Device) -> Self {
+        const COPIED_PROPERTIES: [&str; 12] = [
             "vendor_id",
             "device_id",
             "subsystem_vendor_id",
             "subsystem_device_id",
+            "class_code",
             "revision",
             "current_link_speed",
             "current_link_width",
             "maximum_link_speed",
             "maximum_link_width",
-        ] {
-            if let Some(value) = pci.properties.get(key) {
-                device
-                    .properties
-                    .entry(key.to_owned())
-                    .or_insert_with(|| value.clone());
-            }
-        }
+            "iommu_group",
+            "resource_table_bytes",
+        ];
 
-        if let Some(name) = network_hardware_name(
-            pci.vendor.as_deref(),
-            pci.model.as_deref(),
-            kind.as_deref(),
-        ) {
-            device.name = name;
+        Self {
+            vendor: device.vendor.clone(),
+            model: device.model.clone(),
+            driver: device.driver.clone(),
+            properties: COPIED_PROPERTIES
+                .into_iter()
+                .filter_map(|key| {
+                    device
+                        .properties
+                        .get(key)
+                        .cloned()
+                        .map(|value| (key, value))
+                })
+                .collect(),
         }
     }
 }
@@ -610,11 +661,13 @@ mod tests {
         pci.vendor = Some("Intel Corporation".to_owned());
         pci.model = Some("Ethernet Controller I225-V".to_owned());
         pci.bus_address = Some("0000:06:00.0".to_owned());
+        pci.driver = Some("igc".to_owned());
+        pci.properties.insert("revision".to_owned(), "0x03".into());
         pci.properties
-            .insert("revision".to_owned(), "0x03".into());
+            .insert("class_code".to_owned(), "0x020000".into());
+        pci.properties.insert("iommu_group".to_owned(), "17".into());
 
         let mut network = Device::new("net:eno1", DeviceClass::Network, "Ethernet");
-        network.driver = Some("igc".to_owned());
         network.bus_address = Some("eno1".to_owned());
         network
             .properties
@@ -635,7 +688,10 @@ mod tests {
         assert_eq!(network.name, "Intel I225-V Ethernet");
         assert_eq!(network.vendor.as_deref(), Some("Intel Corporation"));
         assert_eq!(network.model.as_deref(), Some("Ethernet Controller I225-V"));
+        assert_eq!(network.driver.as_deref(), Some("igc"));
         assert_eq!(network.property_str("revision"), Some("0x03"));
+        assert_eq!(network.property_str("class_code"), Some("0x020000"));
+        assert_eq!(network.property_str("iommu_group"), Some("17"));
     }
 
     #[test]

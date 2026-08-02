@@ -516,11 +516,17 @@ mod tests {
     fn network_and_storage_headers_include_the_system_device_name() {
         let mut network = Device::new("net:eno1", DeviceClass::Network, "Intel I225-V Ethernet");
         network.bus_address = Some("eno1".to_owned());
-        assert_eq!(device_display_label(&network), "Intel I225-V Ethernet (eno1)");
+        assert_eq!(
+            device_display_label(&network),
+            "Intel I225-V Ethernet (eno1)"
+        );
 
         let mut storage = Device::new("block:nvme2", DeviceClass::Storage, "WD_BLACK SN7100 2TB");
         storage.bus_address = Some("nvme2n1".to_owned());
-        assert_eq!(device_display_label(&storage), "WD_BLACK SN7100 2TB (nvme2n1)");
+        assert_eq!(
+            device_display_label(&storage),
+            "WD_BLACK SN7100 2TB (nvme2n1)"
+        );
     }
 
     #[test]
