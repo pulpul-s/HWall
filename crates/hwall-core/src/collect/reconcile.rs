@@ -12,9 +12,108 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn apply(snapshot: &mut Snapshot) {
     reconcile_memory_telemetry(snapshot);
+    reconcile_network_identity(snapshot);
     coalesce_single_namespace_nvme(snapshot);
     deduplicate_storage_temperatures(snapshot);
     snapshot.sort();
+}
+
+fn reconcile_network_identity(snapshot: &mut Snapshot) {
+    let pci_devices = snapshot
+        .devices
+        .iter()
+        .filter(|device| device.class == DeviceClass::Pci)
+        .filter_map(|device| Some((device.bus_address.clone()?, device.clone())))
+        .collect::<BTreeMap<_, _>>();
+
+    for device in &mut snapshot.devices {
+        if device.class != DeviceClass::Network {
+            continue;
+        }
+        let Some(address) = device.property_str("pci_address").map(str::to_owned) else {
+            continue;
+        };
+        let Some(pci) = pci_devices.get(&address) else {
+            continue;
+        };
+        let kind = device.property_str("network_kind").map(str::to_owned);
+
+        device.vendor = pci.vendor.clone();
+        device.model = pci.model.clone();
+        for key in [
+            "vendor_id",
+            "device_id",
+            "subsystem_vendor_id",
+            "subsystem_device_id",
+            "revision",
+            "current_link_speed",
+            "current_link_width",
+            "maximum_link_speed",
+            "maximum_link_width",
+        ] {
+            if let Some(value) = pci.properties.get(key) {
+                device
+                    .properties
+                    .entry(key.to_owned())
+                    .or_insert_with(|| value.clone());
+            }
+        }
+
+        if let Some(name) = network_hardware_name(
+            pci.vendor.as_deref(),
+            pci.model.as_deref(),
+            kind.as_deref(),
+        ) {
+            device.name = name;
+        }
+    }
+}
+
+fn network_hardware_name(
+    vendor: Option<&str>,
+    model: Option<&str>,
+    kind: Option<&str>,
+) -> Option<String> {
+    let vendor = vendor.map(concise_vendor_name);
+    let model = model.map(str::trim).filter(|value| !value.is_empty());
+    match (vendor, model) {
+        (Some(vendor), Some(model)) => {
+            let model = if kind == Some("ethernet") {
+                model
+                    .strip_prefix("Ethernet Controller ")
+                    .map(|model| format!("{model} Ethernet"))
+                    .unwrap_or_else(|| model.to_owned())
+            } else {
+                model.to_owned()
+            };
+            if model.starts_with(vendor) {
+                Some(model)
+            } else {
+                Some(format!("{vendor} {model}"))
+            }
+        }
+        (None, Some(model)) => Some(model.to_owned()),
+        (Some(vendor), None) => Some(match kind {
+            Some("wifi") => format!("{vendor} Wi-Fi"),
+            Some("ethernet") => format!("{vendor} Ethernet"),
+            _ => format!("{vendor} network adapter"),
+        }),
+        (None, None) => None,
+    }
+}
+
+fn concise_vendor_name(value: &str) -> &str {
+    let value = value.trim();
+    [
+        " Semiconductor Co., Ltd.",
+        " Semiconductor Corporation",
+        " Corporation",
+        " Inc.",
+    ]
+    .into_iter()
+    .find_map(|suffix| value.strip_suffix(suffix))
+    .unwrap_or(value)
+    .trim()
 }
 
 fn reconcile_memory_telemetry(snapshot: &mut Snapshot) {
@@ -499,6 +598,57 @@ mod tests {
             Identification::KnownDriverMapping,
         ));
         device
+    }
+
+    #[test]
+    fn enriches_network_interfaces_from_their_pci_device() {
+        let mut pci = Device::new(
+            "pci:0000:06:00.0",
+            DeviceClass::Pci,
+            "Intel Corporation Ethernet Controller I225-V",
+        );
+        pci.vendor = Some("Intel Corporation".to_owned());
+        pci.model = Some("Ethernet Controller I225-V".to_owned());
+        pci.bus_address = Some("0000:06:00.0".to_owned());
+        pci.properties
+            .insert("revision".to_owned(), "0x03".into());
+
+        let mut network = Device::new("net:eno1", DeviceClass::Network, "Ethernet");
+        network.driver = Some("igc".to_owned());
+        network.bus_address = Some("eno1".to_owned());
+        network
+            .properties
+            .insert("network_kind".to_owned(), "ethernet".into());
+        network
+            .properties
+            .insert("pci_address".to_owned(), "0000:06:00.0".into());
+
+        let mut snapshot = Snapshot::new();
+        snapshot.devices = vec![pci, network];
+        apply(&mut snapshot);
+
+        let network = snapshot
+            .devices
+            .iter()
+            .find(|device| device.id == "net:eno1")
+            .unwrap();
+        assert_eq!(network.name, "Intel I225-V Ethernet");
+        assert_eq!(network.vendor.as_deref(), Some("Intel Corporation"));
+        assert_eq!(network.model.as_deref(), Some("Ethernet Controller I225-V"));
+        assert_eq!(network.property_str("revision"), Some("0x03"));
+    }
+
+    #[test]
+    fn keeps_factual_wifi_model_names() {
+        assert_eq!(
+            network_hardware_name(
+                Some("Intel Corporation"),
+                Some("Wi-Fi 6E(802.11ax) AX210/AX1675* 2x2 [Typhoon Peak]"),
+                Some("wifi"),
+            )
+            .as_deref(),
+            Some("Intel Wi-Fi 6E(802.11ax) AX210/AX1675* 2x2 [Typhoon Peak]"),
+        );
     }
 
     #[test]

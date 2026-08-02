@@ -652,6 +652,20 @@ fn category_for(device: &Device) -> HardwareCategoryKind {
 }
 
 fn device_subtitle(device: &Device) -> String {
+    if device.class == DeviceClass::Network {
+        let values = [device.driver.as_deref(), device.bus_address.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        return if values.is_empty() {
+            device.class.display_name().to_owned()
+        } else {
+            values.join(" · ")
+        };
+    }
+
     if device.class == DeviceClass::System {
         if let Some(operating_system) = device
             .property_str("os_pretty_name")
@@ -795,6 +809,7 @@ fn property_section(key: &str) -> &'static str {
                 | "mtu"
                 | "transport"
                 | "interface_type"
+                | "pci_address"
                 | "usb_version"
                 | "class_code"
                 | "iommu_group"
@@ -928,15 +943,7 @@ fn hardware_device_visible(device: &Device) -> bool {
                 && !device.property_bool("partition").unwrap_or(false)
                 && !device.name.starts_with("zram")
         }
-        DeviceClass::Network => {
-            let name = device.bus_address.as_deref().unwrap_or(&device.name);
-            !matches!(name, "lo" | "docker0")
-                && !name.starts_with("veth")
-                && !name.starts_with("br-")
-                && !name.starts_with("virbr")
-                && !name.starts_with("tun")
-                && !name.starts_with("tap")
-        }
+        DeviceClass::Network => true,
         DeviceClass::Usb => {
             let class = device.property_str("device_class").unwrap_or_default();
             !device.name.starts_with("Linux ")
@@ -1077,11 +1084,18 @@ mod tests {
         let mut storage = Device::new("block:sda", DeviceClass::Storage, "Example drive");
         storage.vendor = Some("Example vendor".to_owned());
 
+        let mut network = Device::new("net:eno1", DeviceClass::Network, "Intel I225-V Ethernet");
+        network.driver = Some("igc".to_owned());
+        network.bus_address = Some("eno1".to_owned());
+        network.vendor = Some("Intel Corporation".to_owned());
+        network.model = Some("Ethernet Controller I225-V".to_owned());
+
         assert_eq!(device_subtitle(&system), "CachyOS Linux");
         assert_eq!(device_subtitle(&system_without_pretty_name), "CachyOS");
         assert_eq!(device_subtitle(&usb), "1-11");
         assert_eq!(device_subtitle(&motherboard), "Motherboard");
         assert_eq!(device_subtitle(&storage), "Example vendor");
+        assert_eq!(device_subtitle(&network), "igc · eno1");
     }
 
     #[test]
@@ -1093,8 +1107,8 @@ mod tests {
     }
 
     #[test]
-    fn hides_virtual_and_duplicate_transport_devices() {
-        let loopback = Device::new("net:lo", DeviceClass::Network, "lo");
+    fn keeps_virtual_networks_but_hides_duplicate_transport_devices() {
+        let loopback = Device::new("net:lo", DeviceClass::Network, "Loopback");
         let partition = {
             let mut device = Device::new("block:sda1", DeviceClass::Storage, "sda1");
             device
@@ -1109,9 +1123,21 @@ mod tests {
                 .insert("class_code".to_owned(), "0604".into());
             device
         };
-        assert!(!hardware_device_visible(&loopback));
+        let network_controller = {
+            let mut device = Device::new(
+                "pci:0000:06:00.0",
+                DeviceClass::Pci,
+                "Intel Ethernet Controller I225-V",
+            );
+            device
+                .properties
+                .insert("class_code".to_owned(), "020000".into());
+            device
+        };
+        assert!(hardware_device_visible(&loopback));
         assert!(!hardware_device_visible(&partition));
         assert!(!hardware_device_visible(&bridge));
+        assert!(!hardware_device_visible(&network_controller));
     }
 
     #[test]

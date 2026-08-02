@@ -154,6 +154,7 @@ pub fn hardware_property_label(key: &str) -> String {
         "tpm_firmware_write_protected" => "Firmware write-protected".to_owned(),
         "tpm_characteristics" => "Characteristics".to_owned(),
         "mac_address" => "MAC address".to_owned(),
+        "pci_address" => "PCI address".to_owned(),
         "speed_mbps" => "Link speed".to_owned(),
         "current_link_speed" => "Current link speed".to_owned(),
         "maximum_link_speed" | "max_link_speed" => "Maximum link speed".to_owned(),
@@ -182,6 +183,7 @@ pub fn is_low_level_hardware_property(key: &str) -> bool {
                 | "dmi_record_index"
                 | "telemetry_mapping"
                 | "telemetry_bus_address"
+                | "network_kind"
                 | "minimum_voltage"
                 | "maximum_voltage"
                 | "configured_voltage"

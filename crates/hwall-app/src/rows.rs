@@ -323,10 +323,14 @@ fn sensor_row(
 }
 
 fn device_display_label(device: &Device) -> String {
-    if device.class != DeviceClass::Memory {
-        return device.name.clone();
+    match device.class {
+        DeviceClass::Memory => memory_device_display_label(device),
+        DeviceClass::Network | DeviceClass::Storage => device_name_with_system_name(device),
+        _ => device.name.clone(),
     }
+}
 
+fn memory_device_display_label(device: &Device) -> String {
     let locator = device
         .property_str("locator")
         .filter(|value| !value.trim().is_empty());
@@ -344,6 +348,22 @@ fn device_display_label(device: &Device) -> String {
         device.name.clone()
     } else {
         format!("{} — {}", device.name, details.join(" · "))
+    }
+}
+
+fn device_name_with_system_name(device: &Device) -> String {
+    let Some(system_name) = device
+        .bus_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return device.name.clone();
+    };
+    if device.name == system_name || device.name.ends_with(&format!("({system_name})")) {
+        device.name.clone()
+    } else {
+        format!("{} ({system_name})", device.name)
     }
 }
 
@@ -490,6 +510,24 @@ mod tests {
             rows.first().map(|row| row.label.as_str()),
             Some("SPD5118 DDR5 memory module — I²C 0x53"),
         );
+    }
+
+    #[test]
+    fn network_and_storage_headers_include_the_system_device_name() {
+        let mut network = Device::new("net:eno1", DeviceClass::Network, "Intel I225-V Ethernet");
+        network.bus_address = Some("eno1".to_owned());
+        assert_eq!(device_display_label(&network), "Intel I225-V Ethernet (eno1)");
+
+        let mut storage = Device::new("block:nvme2", DeviceClass::Storage, "WD_BLACK SN7100 2TB");
+        storage.bus_address = Some("nvme2n1".to_owned());
+        assert_eq!(device_display_label(&storage), "WD_BLACK SN7100 2TB (nvme2n1)");
+    }
+
+    #[test]
+    fn device_headers_do_not_repeat_an_existing_system_name() {
+        let mut network = Device::new("net:eno1", DeviceClass::Network, "eno1");
+        network.bus_address = Some("eno1".to_owned());
+        assert_eq!(device_display_label(&network), "eno1");
     }
 
     #[test]
