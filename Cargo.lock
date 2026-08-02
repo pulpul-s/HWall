@@ -979,7 +979,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hwall-app"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "directories",
  "hwall-core",
@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "hwall-cli"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "clap",
  "hwall-app",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "hwall-core"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "libc",
  "serde",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "hwall-gui"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "gtk4",
  "hwall-app",
