@@ -76,7 +76,7 @@ pub(super) fn build(application: &Application, settings: &AppSettings) -> (Ui, T
         ),
         rediscover: icon_button("emblem-synchronizing-symbolic", "Rediscover hardware"),
         hidden: icon_button("view-reveal-symbolic", "Manage hidden items"),
-        organize: icon_button("view-sort-ascending-symbolic", "Organize device headers"),
+        organize: icon_button("view-sort-ascending-symbolic", "Organize sensor view"),
         settings: icon_button("emblem-system-symbolic", "Settings"),
     };
     let favorites_button = gtk::ToggleButton::builder()
@@ -101,8 +101,8 @@ pub(super) fn build(application: &Application, settings: &AppSettings) -> (Ui, T
     toolbar.append(&switcher);
     toolbar.append(&pause_button);
     toolbar.append(&actions.rediscover);
-    toolbar.append(&actions.settings);
     toolbar.append(&sensor_controls);
+    toolbar.append(&actions.settings);
     toolbar.append(&search);
 
     let status_left = gtk::Label::new(Some("Discovering"));

@@ -1,5 +1,6 @@
 use gtk::glib;
 use gtk::prelude::*;
+use std::time::Duration;
 
 pub(crate) fn set_label_text(label: &gtk::Label, text: &str, color: Option<&str>) {
     if let Some(color) = color {
@@ -15,6 +16,24 @@ pub(crate) fn restore_scroll_position(scroller: &gtk::ScrolledWindow, value: f64
     glib::idle_add_local_once(move || {
         let maximum = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
         adjustment.set_value(value.clamp(adjustment.lower(), maximum));
+    });
+}
+
+pub(crate) fn copy_text(button: &gtk::Button, text: &str, restored_tooltip: &str) {
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    display.clipboard().set_text(text);
+    button.set_icon_name("emblem-ok-symbolic");
+    button.set_tooltip_text(Some("Copied to clipboard"));
+    let weak_button = button.downgrade();
+    let restored_tooltip = restored_tooltip.to_owned();
+    glib::timeout_add_local(Duration::from_millis(1_500), move || {
+        if let Some(button) = weak_button.upgrade() {
+            button.set_icon_name("edit-copy-symbolic");
+            button.set_tooltip_text(Some(&restored_tooltip));
+        }
+        glib::ControlFlow::Break
     });
 }
 

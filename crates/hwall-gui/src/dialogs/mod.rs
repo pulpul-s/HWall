@@ -1,6 +1,6 @@
 use crate::history::{SensorKey, SharedHistory};
 use crate::table::SensorTable;
-use crate::ui::{attach_labeled, restore_scroll_position, set_label_text};
+use crate::ui::{attach_labeled, copy_text, restore_scroll_position, set_label_text};
 use gtk::prelude::*;
 use gtk::{
     glib, Align, ApplicationWindow, CheckButton, ComboBoxText, Dialog, Grid, Label, ListBox,
@@ -8,7 +8,8 @@ use gtk::{
 };
 use hwall_app::{
     alert_supported_sensor, present_sensor, rule_summary, storage_health_availability_text,
-    AlertRule, AlertState, AppSettings, Density, LogFormat, LogScope, SensorRow, ThemePreference,
+    AlertRule, AlertState, AppSettings, Density, LogFormat, LogScope, RowKind, SensorOrderEntry,
+    SensorRow, ThemePreference,
 };
 use hwall_core::render::{
     format_property_value, format_sample_age, format_value, humanize_key, sensor_kind_name,
@@ -16,7 +17,7 @@ use hwall_core::render::{
 };
 use hwall_core::{
     is_storage_health_property, Device, DeviceClass, Identification, RunningStatistics, Sensor,
-    StorageHealth, StorageHealthAvailability, STORAGE_HEALTH_PROPERTY_KEYS,
+    StorageHealthAvailability, STORAGE_HEALTH_PROPERTY_KEYS,
 };
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -28,9 +29,7 @@ mod preferences;
 mod sensor;
 
 pub(super) use device::show_device_details;
-pub(super) use preferences::{
-    show_device_order, show_hidden_items, show_sensor_alias, show_settings,
-};
+pub(super) use preferences::{show_hidden_items, show_row_alias, show_sensor_order, show_settings};
 pub(super) use sensor::{show_sensor_details, SensorDetailsRequest};
 
 fn details_window(parent: &ApplicationWindow, title: &str, width: i32, height: i32) -> Window {
@@ -49,6 +48,39 @@ fn details_window(parent: &ApplicationWindow, title: &str, width: i32, height: i
 }
 
 fn finish_details_window(window: &Window, list: &ListBox) -> gtk::ScrolledWindow {
+    let scroller = details_scroller(list);
+    window.set_child(Some(&scroller));
+    window.present();
+    scroller
+}
+
+fn finish_details_window_with_copy(
+    window: &Window,
+    list: &ListBox,
+    text: impl Fn() -> String + 'static,
+) -> gtk::ScrolledWindow {
+    let scroller = details_scroller(list);
+
+    let copy = gtk::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .tooltip_text("Copy as plain text")
+        .css_classes(["flat"])
+        .halign(Align::End)
+        .valign(Align::Start)
+        .margin_top(8)
+        .margin_end(8)
+        .build();
+    copy.connect_clicked(move |button| copy_text(button, &text(), "Copy as plain text"));
+
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&scroller));
+    overlay.add_overlay(&copy);
+    window.set_child(Some(&overlay));
+    window.present();
+    scroller
+}
+
+fn details_scroller(list: &ListBox) -> gtk::ScrolledWindow {
     let scroller = gtk::ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
@@ -58,8 +90,6 @@ fn finish_details_window(window: &Window, list: &ListBox) -> gtk::ScrolledWindow
     scroller.set_margin_bottom(10);
     scroller.set_margin_start(10);
     scroller.set_margin_end(10);
-    window.set_child(Some(&scroller));
-    window.present();
     scroller
 }
 
@@ -79,12 +109,6 @@ fn append_section(list: &ListBox, text: &str) {
     label.set_margin_end(12);
     label.add_css_class("heading");
     list.append(&label);
-}
-
-fn append_optional_detail(list: &ListBox, name: &str, value: Option<&str>) {
-    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
-        append_detail(list, name, value);
-    }
 }
 
 fn append_detail(list: &ListBox, name: &str, value: &str) {

@@ -124,6 +124,8 @@ pub struct AppSettings {
     pub show_identifying_information: bool,
     pub history_retention_seconds: u64,
     pub device_order: Vec<String>,
+    pub sensor_row_order: Vec<String>,
+    pub device_aliases: BTreeMap<String, String>,
     pub sensor_aliases: BTreeMap<String, String>,
     pub sensor_alerts: BTreeMap<String, AlertRule>,
     pub columns: Vec<ColumnSettings>,
@@ -152,6 +154,8 @@ impl Default for AppSettings {
             show_identifying_information: false,
             history_retention_seconds: DEFAULT_HISTORY_RETENTION_SECONDS,
             device_order: Vec::new(),
+            sensor_row_order: Vec::new(),
+            device_aliases: BTreeMap::new(),
             sensor_aliases: BTreeMap::new(),
             sensor_alerts: BTreeMap::new(),
             columns: ColumnSettings::default_layout(),
@@ -214,6 +218,17 @@ impl SettingsStore {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         fs::write(&temporary, serialized)?;
         fs::rename(temporary, &self.path)
+    }
+
+    pub fn reset(&self) -> io::Result<()> {
+        for path in [self.path.with_extension("json.tmp"), self.path.clone()] {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -291,12 +306,19 @@ mod tests {
             show_identifying_information: true,
             history_retention_seconds: 3_600,
             device_order: vec!["gpu:0".to_owned(), "cpu:0".to_owned()],
+            sensor_row_order: vec![
+                "group:cpu:0:temperature".to_owned(),
+                "sensor:cpu:0:temp:0".to_owned(),
+            ],
             ..AppSettings::default()
         };
         settings.sensor_aliases.insert(
             "sensor:cpu:temp".to_owned(),
             "Package temperature".to_owned(),
         );
+        settings
+            .device_aliases
+            .insert("cpu:0".to_owned(), "Main processor".to_owned());
         settings.sensor_alerts.insert(
             "sensor:cpu:temp".to_owned(),
             AlertRule {
@@ -318,6 +340,14 @@ mod tests {
         assert_eq!(loaded.history_retention(), Duration::from_secs(3_600));
         assert_eq!(loaded.device_order, vec!["gpu:0", "cpu:0"]);
         assert_eq!(
+            loaded.sensor_row_order,
+            vec!["group:cpu:0:temperature", "sensor:cpu:0:temp:0"]
+        );
+        assert_eq!(
+            loaded.device_aliases.get("cpu:0").map(String::as_str),
+            Some("Main processor"),
+        );
+        assert_eq!(
             loaded
                 .sensor_aliases
                 .get("sensor:cpu:temp")
@@ -333,5 +363,24 @@ mod tests {
         );
         assert!(loaded.visibility.is_hidden("sensor:cpu:temp"));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn reset_removes_saved_and_temporary_settings() {
+        let path = std::env::temp_dir().join(format!(
+            "hwall-settings-reset-test-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("main")
+        ));
+        let temporary = path.with_extension("json.tmp");
+        let store = SettingsStore::at(&path);
+        store.save(&AppSettings::default()).expect("save settings");
+        fs::write(&temporary, b"partial").expect("write temporary settings");
+
+        store.reset().expect("reset settings");
+
+        assert!(!path.exists());
+        assert!(!temporary.exists());
+        store.reset().expect("reset missing settings");
     }
 }

@@ -9,6 +9,7 @@ use hwall_core::{
 };
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HardwareCategoryKind {
@@ -158,6 +159,7 @@ pub struct HardwareSensor {
 pub fn build_hardware_inventory(
     snapshot: &Snapshot,
     statistics: &SnapshotStatistics,
+    device_aliases: &BTreeMap<String, String>,
     sensor_aliases: &BTreeMap<String, String>,
     alert_rules: &BTreeMap<String, AlertRule>,
     alert_states: &BTreeMap<String, AlertState>,
@@ -174,6 +176,7 @@ pub fn build_hardware_inventory(
         let projected = project_device(
             display_device.as_ref(),
             statistics,
+            device_aliases,
             sensor_aliases,
             alert_rules,
             alert_states,
@@ -202,6 +205,62 @@ pub fn build_hardware_inventory(
         });
     }
     HardwareInventory { categories }
+}
+
+pub fn hardware_device_text(device: &HardwareDevice) -> String {
+    let mut out = String::new();
+    append_hardware_device_text(&mut out, device);
+    out.trim().to_owned()
+}
+
+pub fn hardware_inventory_text(inventory: &HardwareInventory) -> String {
+    let mut out = String::new();
+    for (category_index, category) in inventory.categories.iter().enumerate() {
+        if category_index > 0 {
+            out.push('\n');
+        }
+        let _ = writeln!(out, "{}", category.label);
+        let _ = writeln!(out, "{}", "=".repeat(category.label.chars().count()));
+        for device in &category.devices {
+            append_hardware_device_text(&mut out, device);
+        }
+    }
+    out.trim_end().to_owned()
+}
+
+fn append_hardware_device_text(out: &mut String, device: &HardwareDevice) {
+    let _ = writeln!(out, "\n{}", device.name);
+    if !device.subtitle.trim().is_empty() {
+        let _ = writeln!(out, "{}", device.subtitle);
+    }
+    for section in &device.sections {
+        let _ = writeln!(out, "\n{}", section.title);
+        for property in &section.properties {
+            let _ = writeln!(out, "{}: {}", property.label, property.value);
+        }
+    }
+    if !device.sensors.is_empty() {
+        let _ = writeln!(out, "\nRelated sensors");
+        let mut current_group = None;
+        for sensor in &device.sensors {
+            if current_group != Some(sensor.group.as_str()) {
+                current_group = Some(sensor.group.as_str());
+                let _ = writeln!(out, "{}", sensor.group);
+            }
+            let _ = writeln!(out, "  {}", sensor.label);
+            let _ = writeln!(out, "    Current: {}", sensor.current);
+            let _ = writeln!(out, "    Minimum: {}", sensor.minimum);
+            let _ = writeln!(out, "    Maximum: {}", sensor.maximum);
+            let _ = writeln!(out, "    Average: {}", sensor.average);
+            let _ = writeln!(out, "    Status: {}", sensor.status);
+        }
+    }
+    if !device.advanced.is_empty() {
+        let _ = writeln!(out, "\nAdvanced");
+        for property in &device.advanced {
+            let _ = writeln!(out, "{}: {}", property.key, property.value);
+        }
+    }
 }
 
 fn hardware_view_device<'a>(snapshot: &'a Snapshot, device: &'a Device) -> Option<Cow<'a, Device>> {
@@ -337,11 +396,18 @@ fn chassis_type_name(code: u8) -> Option<&'static str> {
 fn project_device(
     device: &Device,
     statistics: &SnapshotStatistics,
+    device_aliases: &BTreeMap<String, String>,
     sensor_aliases: &BTreeMap<String, String>,
     alert_rules: &BTreeMap<String, AlertRule>,
     alert_states: &BTreeMap<String, AlertState>,
 ) -> HardwareDevice {
     let category = category_for(device);
+    let original_name = device.name.clone();
+    let name = device_aliases
+        .get(&device.id)
+        .filter(|alias| !alias.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| original_name.clone());
     let subtitle = device_subtitle(device);
     let storage_health_refreshable = supports_storage_health(device);
     let has_storage_health = device.storage_health.is_some()
@@ -358,6 +424,14 @@ fn project_device(
         "Class",
         Some(device.class.display_name()),
     );
+    if name != original_name {
+        push_identity(
+            &mut sections,
+            "generated_name",
+            "Original name",
+            Some(&original_name),
+        );
+    }
     push_identity(&mut sections, "vendor", "Vendor", device.vendor.as_deref());
     push_identity(&mut sections, "model", "Model", device.model.as_deref());
     push_identity(&mut sections, "driver", "Driver", device.driver.as_deref());
@@ -374,6 +448,9 @@ fn project_device(
     }
 
     for (key, value) in &device.properties {
+        if duplicate_memory_location_property(device, key) {
+            continue;
+        }
         let Some(value) = format_property_value(key, value) else {
             continue;
         };
@@ -436,7 +513,8 @@ fn project_device(
 
     let mut search_parts = vec![
         category.label().to_owned(),
-        device.name.clone(),
+        name.clone(),
+        original_name,
         subtitle.clone(),
         device.id.clone(),
     ];
@@ -460,7 +538,7 @@ fn project_device(
     HardwareDevice {
         id: device.id.clone(),
         category,
-        name: device.name.clone(),
+        name,
         subtitle,
         sections: projected_sections,
         advanced,
@@ -471,6 +549,30 @@ fn project_device(
         }),
         search_text: search_parts.join(" ").to_lowercase(),
     }
+}
+
+fn duplicate_memory_location_property(device: &Device, key: &str) -> bool {
+    if device.class != DeviceClass::Memory || device.property_str("memory_role") != Some("module") {
+        return false;
+    }
+    let Some(value) = device
+        .property_str(key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let earlier_keys: &[&str] = match key {
+        "locator" => &["slot_label"],
+        "bank_locator" => &["slot_label", "locator"],
+        _ => return false,
+    };
+    earlier_keys.iter().any(|earlier| {
+        device
+            .property_str(earlier)
+            .map(str::trim)
+            .is_some_and(|candidate| candidate == value)
+    })
 }
 
 pub fn storage_health_availability_text(availability: StorageHealthAvailability) -> &'static str {
@@ -1006,6 +1108,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         );
         let cpu = inventory.device("cpu:0").expect("CPU hardware device");
 
@@ -1048,6 +1151,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         );
         assert_eq!(inventory.device_count(), 1);
         let device = inventory.device("cpu:0").expect("CPU device");
@@ -1065,6 +1169,135 @@ mod tests {
         assert_eq!(device.sensors[0].current, "50.0 °C");
         assert_eq!(device.sensors[0].status, "Normal");
         assert!(device.advanced.is_empty());
+    }
+
+    #[test]
+    fn device_aliases_are_presentational_and_keep_generated_names_searchable() {
+        let mut snapshot = Snapshot::new();
+        snapshot
+            .devices
+            .push(Device::new("cpu:0", DeviceClass::Cpu, "Example CPU"));
+        let aliases = BTreeMap::from([("cpu:0".to_owned(), "Main processor".to_owned())]);
+
+        let inventory = build_hardware_inventory(
+            &snapshot,
+            &SnapshotStatistics::new(),
+            &aliases,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let device = inventory.device("cpu:0").expect("CPU device");
+        assert_eq!(device.name, "Main processor");
+        assert!(device.matches("main processor"));
+        assert!(device.matches("example cpu"));
+        assert_eq!(snapshot.devices[0].name, "Example CPU");
+        assert!(device.sections.iter().any(|section| {
+            section.properties.iter().any(|property| {
+                property.label == "Original name" && property.value == "Example CPU"
+            })
+        }));
+    }
+
+    #[test]
+    fn plain_text_inventory_includes_alias_original_name_and_sensor_values() {
+        let mut snapshot = Snapshot::new();
+        let mut cpu = Device::new("cpu:0", DeviceClass::Cpu, "Example CPU");
+        cpu.vendor = Some("Example vendor".to_owned());
+        cpu.sensors.push(Sensor::new(
+            "temperature:package",
+            "Package",
+            SensorKind::Temperature,
+            Unit::Celsius,
+            Some(50.0),
+            "/sys/example",
+            Identification::KernelLabel,
+        ));
+        snapshot.devices.push(cpu);
+        let aliases = BTreeMap::from([("cpu:0".to_owned(), "Main processor".to_owned())]);
+        let inventory = build_hardware_inventory(
+            &snapshot,
+            &SnapshotStatistics::new(),
+            &aliases,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+
+        let text = hardware_inventory_text(&inventory);
+        let device_text = hardware_device_text(inventory.device("cpu:0").expect("CPU device"));
+
+        assert!(text.contains("Processor\n========="));
+        assert!(text.contains("Main processor"));
+        assert!(text.contains("Original name: Example CPU"));
+        assert!(text.contains("Vendor: Example vendor"));
+        assert!(text.contains("Package\n    Current: 50.0 °C"));
+        assert!(!device_text.contains("Processor\n========="));
+        assert!(device_text.starts_with("Main processor"));
+        assert!(device_text.contains("Original name: Example CPU"));
+    }
+
+    #[test]
+    fn memory_locations_only_drop_trimmed_exact_duplicates() {
+        let mut memory = Device::new("memory:slot", DeviceClass::Memory, "Memory module");
+        memory
+            .properties
+            .insert("memory_role".to_owned(), "module".into());
+        memory
+            .properties
+            .insert("slot_label".to_owned(), " DIMM 1 ".into());
+        memory
+            .properties
+            .insert("locator".to_owned(), "DIMM 1".into());
+        memory
+            .properties
+            .insert("bank_locator".to_owned(), "DIMM 10".into());
+
+        assert!(duplicate_memory_location_property(&memory, "locator"));
+        assert!(!duplicate_memory_location_property(&memory, "bank_locator"));
+
+        memory
+            .properties
+            .insert("locator".to_owned(), "dimm 1".into());
+        assert!(!duplicate_memory_location_property(&memory, "locator"));
+    }
+
+    #[test]
+    fn distinct_memory_locations_keep_explicit_labels() {
+        let mut snapshot = Snapshot::new();
+        let mut memory = Device::new("memory:slot", DeviceClass::Memory, "Memory module");
+        memory
+            .properties
+            .insert("memory_role".to_owned(), "module".into());
+        memory
+            .properties
+            .insert("slot_label".to_owned(), "P0 CHANNEL A / DIMM 1".into());
+        memory
+            .properties
+            .insert("locator".to_owned(), "DIMM 1".into());
+        memory
+            .properties
+            .insert("bank_locator".to_owned(), "P0 CHANNEL A".into());
+        snapshot.devices.push(memory);
+
+        let inventory = build_hardware_inventory(
+            &snapshot,
+            &SnapshotStatistics::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let device = inventory.device("memory:slot").expect("memory device");
+        let properties = device
+            .sections
+            .iter()
+            .flat_map(|section| section.properties.iter())
+            .map(|property| (property.label.as_str(), property.value.as_str()))
+            .collect::<Vec<_>>();
+        assert!(properties.contains(&("Slot", "P0 CHANNEL A / DIMM 1")));
+        assert!(properties.contains(&("Firmware locator", "DIMM 1")));
+        assert!(properties.contains(&("Bank locator", "P0 CHANNEL A")));
     }
 
     #[test]
@@ -1196,6 +1429,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         );
 
         let board = inventory.device("motherboard:0").unwrap();
@@ -1279,6 +1513,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         );
 
         let board = inventory.device("motherboard:0").unwrap();
@@ -1328,6 +1563,7 @@ mod tests {
         let inventory = build_hardware_inventory(
             &snapshot,
             &SnapshotStatistics::new(),
+            &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),

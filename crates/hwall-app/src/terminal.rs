@@ -53,7 +53,7 @@ pub fn render_terminal_view(
     let mut out = match view {
         TerminalView::Mixed | TerminalView::Hardware => {
             let inventory =
-                build_hardware_inventory(snapshot, statistics, &aliases, &rules, &states);
+                build_hardware_inventory(snapshot, statistics, &aliases, &aliases, &rules, &states);
             render_inventory(&inventory, view == TerminalView::Mixed)
         }
         TerminalView::Sensors => {
@@ -63,6 +63,7 @@ pub fn render_terminal_view(
                 statistics,
                 RowOptions {
                     visibility: &visibility,
+                    device_aliases: &aliases,
                     sensor_aliases: &aliases,
                     device_order: &[],
                     show_sensor_groups: true,

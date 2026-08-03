@@ -1,10 +1,16 @@
-use crate::ui::{restore_scroll_position, set_label_text};
+use crate::ui::{copy_text, restore_scroll_position, set_label_text};
 use gtk::prelude::*;
 use gtk::{Align, Orientation, SelectionMode};
-use hwall_app::{HardwareDevice, HardwareInventory, HardwareProperty, HardwareSensor};
-use std::cell::RefCell;
+use hwall_app::{
+    hardware_device_text, hardware_inventory_text, HardwareDevice, HardwareInventory,
+    HardwareProperty, HardwareSensor,
+};
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
+
+const HARDWARE_COPY_TOOLTIP: &str =
+    "Copy the selected device as plain text; Shift-click copies all hardware";
 
 #[derive(Clone)]
 pub(super) struct HardwareView {
@@ -12,6 +18,7 @@ pub(super) struct HardwareView {
     navigation: gtk::ListBox,
     details: gtk::Box,
     details_scroller: gtk::ScrolledWindow,
+    copy_button: gtk::Button,
     state: Rc<RefCell<HardwareState>>,
 }
 
@@ -76,10 +83,55 @@ impl HardwareView {
         paned.set_hexpand(true);
         paned.set_vexpand(true);
 
-        let widget = gtk::Box::new(Orientation::Vertical, 0);
-        widget.append(&paned);
-
         let state = Rc::new(RefCell::new(HardwareState::default()));
+
+        let copy_button = gtk::Button::builder()
+            .icon_name("edit-copy-symbolic")
+            .tooltip_text(HARDWARE_COPY_TOOLTIP)
+            .css_classes(["flat"])
+            .sensitive(false)
+            .halign(Align::End)
+            .valign(Align::Start)
+            .margin_top(8)
+            .margin_end(8)
+            .build();
+        let copy_all = Rc::new(Cell::new(false));
+        let copy_all_for_gesture = Rc::clone(&copy_all);
+        let copy_gesture = gtk::GestureClick::new();
+        copy_gesture.connect_pressed(move |gesture, _, _, _| {
+            copy_all_for_gesture.set(
+                gesture
+                    .current_event_state()
+                    .contains(gtk::gdk::ModifierType::SHIFT_MASK),
+            );
+        });
+        copy_button.add_controller(copy_gesture);
+
+        let state_for_copy = Rc::clone(&state);
+        copy_button.connect_clicked(move |button| {
+            let copy_all = copy_all.replace(false);
+            let state = state_for_copy.borrow();
+            let text = state.inventory.as_ref().and_then(|inventory| {
+                if copy_all {
+                    Some(hardware_inventory_text(inventory))
+                } else {
+                    state
+                        .selected_id
+                        .as_deref()
+                        .and_then(|id| inventory.device(id))
+                        .map(hardware_device_text)
+                }
+            });
+            if let Some(text) = text {
+                copy_text(button, &text, HARDWARE_COPY_TOOLTIP);
+            }
+        });
+
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&paned));
+        overlay.add_overlay(&copy_button);
+        let widget = gtk::Box::new(Orientation::Vertical, 0);
+        widget.append(&overlay);
 
         let state_for_selection = Rc::clone(&state);
         let details_for_selection = details.clone();
@@ -98,11 +150,13 @@ impl HardwareView {
             navigation,
             details,
             details_scroller,
+            copy_button,
             state,
         }
     }
 
     pub(super) fn sync(&self, inventory: HardwareInventory) {
+        self.copy_button.set_sensitive(inventory.device_count() > 0);
         let (navigation_changed, query) = {
             let mut state = self.state.borrow_mut();
             let signature = navigation_signature(&inventory, &state.query);

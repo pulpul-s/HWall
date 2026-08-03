@@ -48,6 +48,15 @@ impl VisibilityState {
         toggle_membership(&mut self.favorites, key.into())
     }
 
+    pub fn set_favorite(&mut self, key: impl Into<String>, favorite: bool) {
+        let key = key.into();
+        if favorite {
+            self.favorites.insert(key);
+        } else {
+            self.favorites.remove(&key);
+        }
+    }
+
     pub fn is_favorite(&self, key: &str) -> bool {
         self.favorites.contains(key)
     }
@@ -72,6 +81,10 @@ mod tests {
         state.hide("sensor:cpu:temp", "CPU temperature");
         assert!(state.is_hidden("sensor:cpu:temp"));
         assert!(state.toggle_favorite("sensor:cpu:temp"));
+        assert!(state.is_favorite("sensor:cpu:temp"));
+        state.set_favorite("sensor:cpu:temp", false);
+        assert!(!state.is_favorite("sensor:cpu:temp"));
+        state.set_favorite("sensor:cpu:temp", true);
         assert!(state.is_favorite("sensor:cpu:temp"));
         assert!(state.toggle_collapsed("device:cpu"));
         assert!(state.is_collapsed("device:cpu"));

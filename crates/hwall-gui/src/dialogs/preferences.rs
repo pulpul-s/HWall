@@ -3,13 +3,18 @@ use crate::history::MAX_HISTORY_RETENTION;
 use crate::history_chart::DurationSelector;
 use hwall_app::MIN_REFRESH_INTERVAL_MS;
 
-pub(crate) fn show_sensor_alias(
+pub(crate) fn show_row_alias(
     parent: &ApplicationWindow,
     row: SensorRow,
     on_apply: impl Fn(Option<String>) + 'static,
 ) {
+    let item = if row.kind == RowKind::Device {
+        "header"
+    } else {
+        "sensor"
+    };
     let dialog = Dialog::builder()
-        .title("Rename sensor")
+        .title(format!("Rename {item}"))
         .transient_for(parent)
         .modal(true)
         .use_header_bar(1)
@@ -28,13 +33,8 @@ pub(crate) fn show_sensor_alias(
     let original = Label::new(Some(&format!("Original name: {}", row.original_label)));
     original.set_xalign(0.0);
     original.add_css_class("dim-label");
-    let entry = gtk::Entry::builder()
-        .placeholder_text(row.original_label.as_str())
-        .activates_default(true)
-        .build();
-    if row.label != row.original_label {
-        entry.set_text(&row.label);
-    }
+    let entry = gtk::Entry::builder().activates_default(true).build();
+    entry.set_text(&row.label);
     body.append(&original);
     body.append(&entry);
     dialog.content_area().append(&body);
@@ -60,7 +60,9 @@ pub(crate) fn show_settings(
     table: SensorTable,
     plasma_placement_available: bool,
     on_apply: impl Fn(AppSettings) + 'static,
+    on_reset: impl Fn() + 'static,
 ) {
+    let on_reset: Rc<dyn Fn()> = Rc::new(on_reset);
     let dialog = Dialog::builder()
         .title(format!("HWall {} Settings", env!("CARGO_PKG_VERSION")))
         .transient_for(parent)
@@ -190,7 +192,59 @@ pub(crate) fn show_settings(
     }
     grid.attach(&columns, 0, 13, 2, 1);
 
-    dialog.content_area().append(&grid);
+    let reset = gtk::Button::with_label("Reset all settings…");
+    reset.set_halign(Align::Start);
+    reset.set_margin_start(14);
+    reset.set_margin_end(14);
+    reset.add_css_class("destructive-action");
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.append(&grid);
+    body.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    body.append(&reset);
+    body.set_margin_bottom(14);
+    dialog.content_area().append(&body);
+
+    let dialog_for_reset = dialog.clone();
+    let on_reset_for_click = Rc::clone(&on_reset);
+    reset.connect_clicked(move |_| {
+        let confirmation = Dialog::builder()
+            .title("Reset all settings?")
+            .transient_for(&dialog_for_reset)
+            .modal(true)
+            .use_header_bar(1)
+            .default_width(460)
+            .build();
+        confirmation.add_button("Cancel", ResponseType::Cancel);
+        confirmation.add_button("Reset", ResponseType::Accept);
+        if let Some(button) = confirmation
+            .widget_for_response(ResponseType::Accept)
+            .and_then(|widget| widget.downcast::<gtk::Button>().ok())
+        {
+            button.add_css_class("destructive-action");
+        }
+        let message = Label::new(Some(concat!(
+            "This resets window sizing, columns, aliases, hidden items, favorites, ",
+            "ordering, alerts, logging preferences and all other saved settings.\n\n",
+            "HWall will close after the reset."
+        )));
+        message.set_wrap(true);
+        message.set_xalign(0.0);
+        message.set_margin_top(14);
+        message.set_margin_bottom(14);
+        message.set_margin_start(14);
+        message.set_margin_end(14);
+        confirmation.content_area().append(&message);
+        let settings_dialog = dialog_for_reset.clone();
+        let on_reset = Rc::clone(&on_reset_for_click);
+        confirmation.connect_response(move |confirmation, response| {
+            if response == ResponseType::Accept {
+                (on_reset)();
+                settings_dialog.close();
+            }
+            confirmation.close();
+        });
+        confirmation.present();
+    });
     let table_for_response = table.clone();
     dialog.connect_response(move |dialog, response| {
         if response == ResponseType::Apply {
@@ -315,34 +369,34 @@ pub(crate) fn show_hidden_items(
     dialog.present();
 }
 
-pub(crate) fn show_device_order(
+pub(crate) fn show_sensor_order(
     parent: &ApplicationWindow,
-    devices: Vec<(String, String)>,
-    on_apply: impl Fn(Vec<String>) + 'static,
+    entries: Vec<SensorOrderEntry>,
+    on_apply: impl Fn(Vec<String>, Vec<String>) + 'static,
 ) {
     let dialog = Dialog::builder()
-        .title("Organize device headers")
+        .title("Organize sensor view")
         .transient_for(parent)
         .modal(true)
         .use_header_bar(1)
-        .default_width(560)
-        .default_height(520)
+        .default_width(600)
+        .default_height(560)
         .build();
     dialog.add_button("Cancel", ResponseType::Cancel);
     dialog.add_button("Apply", ResponseType::Apply);
 
-    let items = Rc::new(RefCell::new(devices));
+    let items = Rc::new(RefCell::new(entries));
     let list = ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::Single);
-    populate_device_list(&list, &items.borrow(), None);
+    populate_order_list(&list, &items.borrow(), None);
 
     let move_up = gtk::Button::builder()
         .icon_name("go-up-symbolic")
-        .tooltip_text("Move selected device up")
+        .tooltip_text("Move selected item up")
         .build();
     let move_down = gtk::Button::builder()
         .icon_name("go-down-symbolic")
-        .tooltip_text("Move selected device down")
+        .tooltip_text("Move selected item down")
         .build();
     let controls = gtk::Box::new(gtk::Orientation::Vertical, 6);
     controls.append(&move_up);
@@ -365,62 +419,201 @@ pub(crate) fn show_device_order(
 
     let items_for_up = items.clone();
     let list_for_up = list.clone();
-    move_up.connect_clicked(move |_| {
-        move_selected_device(&list_for_up, &items_for_up, -1);
-    });
+    move_up.connect_clicked(move |_| move_selected_order_item(&list_for_up, &items_for_up, -1));
 
     let items_for_down = items.clone();
     let list_for_down = list.clone();
-    move_down.connect_clicked(move |_| {
-        move_selected_device(&list_for_down, &items_for_down, 1);
-    });
+    move_down
+        .connect_clicked(move |_| move_selected_order_item(&list_for_down, &items_for_down, 1));
 
     dialog.connect_response(move |dialog, response| {
         if response == ResponseType::Apply {
-            on_apply(items.borrow().iter().map(|(id, _)| id.clone()).collect());
+            let items = items.borrow();
+            let device_order = items
+                .iter()
+                .filter(|item| item.kind == RowKind::Device)
+                .map(|item| item.id.clone())
+                .collect();
+            let sensor_row_order = items
+                .iter()
+                .filter(|item| item.kind != RowKind::Device)
+                .map(|item| item.id.clone())
+                .collect();
+            on_apply(device_order, sensor_row_order);
         }
         dialog.close();
     });
     dialog.present();
 }
 
-fn move_selected_device(list: &ListBox, devices: &RefCell<Vec<(String, String)>>, direction: i32) {
+fn move_selected_order_item(
+    list: &ListBox,
+    entries: &RefCell<Vec<SensorOrderEntry>>,
+    direction: i32,
+) {
     let Some(row) = list.selected_row() else {
         return;
     };
-    let current = row.index();
-    let target = current + direction;
-    let len = devices.borrow().len() as i32;
-    if current < 0 || !(0..len).contains(&target) {
+    let start = row.index();
+    if start < 0 {
         return;
     }
-
-    devices.borrow_mut().swap(current as usize, target as usize);
-    populate_device_list(list, &devices.borrow(), Some(target as usize));
+    let mut entries = entries.borrow_mut();
+    let start = start as usize;
+    let Some(selected_id) = entries.get(start).map(|entry| entry.id.clone()) else {
+        return;
+    };
+    if move_order_item(entries.as_mut_slice(), start, direction) {
+        populate_order_list(list, &entries, Some(&selected_id));
+    }
 }
 
-fn populate_device_list(
-    list: &ListBox,
-    devices: &[(String, String)],
-    selected_index: Option<usize>,
-) {
+fn move_order_item(entries: &mut [SensorOrderEntry], start: usize, direction: i32) -> bool {
+    let Some(selected) = entries.get(start) else {
+        return false;
+    };
+    let selected_depth = selected.depth;
+    let selected_parent = selected.parent_id.clone();
+    let end = subtree_end(entries, start);
+
+    if direction == 0 {
+        return false;
+    }
+    if direction < 0 {
+        let Some(previous) = (0..start).rev().find(|index| {
+            entries[*index].depth == selected_depth && entries[*index].parent_id == selected_parent
+        }) else {
+            return false;
+        };
+        entries[previous..end].rotate_right(end - start);
+    } else {
+        let Some(next) = (end..entries.len()).find(|index| {
+            entries[*index].depth == selected_depth && entries[*index].parent_id == selected_parent
+        }) else {
+            return false;
+        };
+        let next_end = subtree_end(entries, next);
+        entries[start..next_end].rotate_left(end - start);
+    }
+    true
+}
+
+fn subtree_end(entries: &[SensorOrderEntry], start: usize) -> usize {
+    let depth = entries[start].depth;
+    entries[start + 1..]
+        .iter()
+        .position(|entry| entry.depth <= depth)
+        .map(|offset| start + 1 + offset)
+        .unwrap_or(entries.len())
+}
+
+fn populate_order_list(list: &ListBox, entries: &[SensorOrderEntry], selected_id: Option<&str>) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
-    for (_, name) in devices {
-        let label = Label::new(Some(name));
+    let mut selected_row = None;
+    for entry in entries {
+        let label = Label::new(Some(&entry.label));
         label.set_xalign(0.0);
         label.set_margin_top(5);
         label.set_margin_bottom(5);
-        label.set_margin_start(8);
+        label.set_margin_start(8 + i32::from(entry.depth) * 22);
         label.set_margin_end(8);
+        if entry.kind != RowKind::Sensor {
+            label.add_css_class("heading");
+        }
         let row = ListBoxRow::new();
         row.set_child(Some(&label));
+        if selected_id == Some(entry.id.as_str()) {
+            selected_row = Some(row.clone());
+        }
         list.append(&row);
     }
-    if let Some(index) = selected_index {
-        if let Some(row) = list.row_at_index(index as i32) {
-            list.select_row(Some(&row));
+    if let Some(row) = selected_row {
+        list.select_row(Some(&row));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, parent_id: Option<&str>, kind: RowKind, depth: u8) -> SensorOrderEntry {
+        SensorOrderEntry {
+            id: id.to_owned(),
+            parent_id: parent_id.map(str::to_owned),
+            kind,
+            depth,
+            label: id.to_owned(),
         }
+    }
+
+    fn hierarchy() -> Vec<SensorOrderEntry> {
+        vec![
+            entry("a", None, RowKind::Device, 0),
+            entry("group:a:temperature", Some("a"), RowKind::Header, 1),
+            entry(
+                "sensor:a:t1",
+                Some("group:a:temperature"),
+                RowKind::Sensor,
+                2,
+            ),
+            entry(
+                "sensor:a:t2",
+                Some("group:a:temperature"),
+                RowKind::Sensor,
+                2,
+            ),
+            entry("group:a:fan", Some("a"), RowKind::Header, 1),
+            entry("sensor:a:f1", Some("group:a:fan"), RowKind::Sensor, 2),
+            entry("b", None, RowKind::Device, 0),
+        ]
+    }
+
+    #[test]
+    fn moving_a_device_moves_its_complete_subtree() {
+        let mut entries = hierarchy();
+
+        assert!(move_order_item(&mut entries, 6, -1));
+
+        assert_eq!(entries[0].id, "b");
+        assert_eq!(entries[1].id, "a");
+        assert_eq!(
+            entries.last().map(|entry| entry.id.as_str()),
+            Some("sensor:a:f1")
+        );
+    }
+
+    #[test]
+    fn moving_a_group_moves_its_sensor_subtree() {
+        let mut entries = hierarchy();
+
+        assert!(move_order_item(&mut entries, 4, -1));
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "a",
+                "group:a:fan",
+                "sensor:a:f1",
+                "group:a:temperature",
+                "sensor:a:t1",
+                "sensor:a:t2",
+                "b",
+            ]
+        );
+    }
+
+    #[test]
+    fn moving_a_sensor_stays_within_its_parent_group() {
+        let mut entries = hierarchy();
+
+        assert!(move_order_item(&mut entries, 3, -1));
+        assert_eq!(entries[2].id, "sensor:a:t2");
+        assert_eq!(entries[3].id, "sensor:a:t1");
+        assert!(!move_order_item(&mut entries, 2, -1));
     }
 }

@@ -28,9 +28,9 @@ pub use alerts::{
     AlertState, DEFAULT_CRITICAL_COLOR, DEFAULT_WARNING_COLOR,
 };
 pub use hardware::{
-    build_hardware_inventory, storage_health_availability_text, HardwareCategory,
-    HardwareCategoryKind, HardwareDevice, HardwareInventory, HardwareProperty, HardwareSection,
-    HardwareSensor,
+    build_hardware_inventory, hardware_device_text, hardware_inventory_text,
+    storage_health_availability_text, HardwareCategory, HardwareCategoryKind, HardwareDevice,
+    HardwareInventory, HardwareProperty, HardwareSection, HardwareSensor,
 };
 pub use logging::{
     default_log_directory, timestamped_log_path, LogFileWriter, LogFormat, LogScope, LogWorker,
@@ -39,7 +39,10 @@ pub use plasma::{
     plasma_window_placement_supported, sync_plasma_window_placement, MAIN_WINDOW_TITLE,
 };
 pub use presentation::{present_sensor, SensorPresentation};
-pub use rows::{build_sensor_rows, ordered_device_entries, RowKind, RowOptions, SensorRow};
+pub use rows::{
+    build_sensor_rows, build_sensor_rows_with_order, ordered_device_entries, sensor_order_entries,
+    RowKind, RowOptions, SensorOrderEntry, SensorRow,
+};
 pub use settings::{
     AppSettings, ColumnSettings, Density, SettingsStore, ThemePreference,
     DEFAULT_HISTORY_RETENTION_SECONDS, MAX_HISTORY_RETENTION_SECONDS,

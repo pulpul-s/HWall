@@ -15,8 +15,8 @@ use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Orientation};
 use history::SensorKey;
 use hwall_app::{
-    alert_supported_sensor, build_hardware_inventory, build_sensor_rows, default_log_directory,
-    ordered_device_entries, plasma_window_placement_supported, sensor_key,
+    alert_supported_sensor, build_hardware_inventory, build_sensor_rows_with_order,
+    default_log_directory, plasma_window_placement_supported, sensor_key, sensor_order_entries,
     sync_plasma_window_placement, timestamped_log_path, AlertEngine, AlertEvent, AlertSeverity,
     AppSettings, LogScope, RowKind, RowOptions, SensorRow, SettingsStore, APPLICATION_ID,
 };
@@ -69,6 +69,7 @@ struct GuiModel {
     hardware_query: String,
     history_export_directory: Rc<RefCell<PathBuf>>,
     timed_notice: Option<TimedNotice>,
+    settings_reset_pending: bool,
 }
 
 impl GuiModel {
@@ -154,6 +155,7 @@ fn build_ui(application: &Application) {
         hardware_query: String::new(),
         history_export_directory: Rc::new(RefCell::new(default_log_directory())),
         timed_notice: None,
+        settings_reset_pending: false,
     }));
 
     connect_actions(&model, &ui, actions);
@@ -268,17 +270,30 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
     let model_for_organize = model.clone();
     let ui_for_organize = ui.clone();
     organize.connect_clicked(move |_| {
-        let devices = {
+        let entries = {
             let borrowed = model_for_organize.borrow();
-            ordered_device_entries(borrowed.session.snapshot(), &borrowed.settings.device_order)
+            sensor_order_entries(
+                borrowed.session.snapshot(),
+                &borrowed.settings.device_order,
+                &borrowed.settings.sensor_row_order,
+                &borrowed.settings.device_aliases,
+                &borrowed.settings.sensor_aliases,
+            )
         };
         let model_after_apply = model_for_organize.clone();
         let ui_after_apply = ui_for_organize.clone();
-        dialogs::show_device_order(&ui_for_organize.window, devices, move |device_order| {
-            model_after_apply.borrow_mut().settings.device_order = device_order;
-            save_settings(&model_after_apply, &ui_after_apply);
-            rebuild_rows(&model_after_apply, &ui_after_apply);
-        });
+        dialogs::show_sensor_order(
+            &ui_for_organize.window,
+            entries,
+            move |device_order, sensor_row_order| {
+                let mut borrowed = model_after_apply.borrow_mut();
+                borrowed.settings.device_order = device_order;
+                borrowed.settings.sensor_row_order = sensor_row_order;
+                drop(borrowed);
+                save_settings(&model_after_apply, &ui_after_apply);
+                rebuild_rows(&model_after_apply, &ui_after_apply);
+            },
+        );
     });
 
     let model_for_settings = model.clone();
@@ -287,6 +302,8 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
         let current = model_for_settings.borrow().settings.clone();
         let model_after_apply = model_for_settings.clone();
         let ui_after_apply = ui_for_settings.clone();
+        let model_after_reset = model_for_settings.clone();
+        let ui_after_reset = ui_for_settings.clone();
         let plasma_placement_available = plasma_window_placement_supported();
         dialogs::show_settings(
             &ui_for_settings.window,
@@ -330,13 +347,35 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
                 save_settings(&model_after_apply, &ui_after_apply);
                 sync_active_view(&model_after_apply, &ui_after_apply);
             },
+            move || {
+                let (_, plasma_error) = synchronize_plasma_window_placement(false, false);
+                if let Some(error) = plasma_error {
+                    model_after_reset.borrow_mut().notice = error;
+                    update_status(&model_after_reset, &ui_after_reset);
+                    return;
+                }
+                let reset_result = model_after_reset.borrow().settings_store.reset();
+                match reset_result {
+                    Ok(()) => {
+                        model_after_reset.borrow_mut().settings_reset_pending = true;
+                        ui_after_reset.application.quit();
+                    }
+                    Err(error) => {
+                        model_after_reset.borrow_mut().notice =
+                            format!("Could not reset settings: {error}");
+                        update_status(&model_after_reset, &ui_after_reset);
+                    }
+                }
+            },
         );
     });
 
     let model_for_activate = model.clone();
     let ui_for_activate = ui.clone();
-    ui.table.view.connect_activate(move |_, _| {
-        show_selected_details(&model_for_activate, &ui_for_activate);
+    ui.table.view.connect_activate(move |_, position| {
+        if let Some(row) = ui_for_activate.table.row_at(position) {
+            show_details_for_row(&model_for_activate, &ui_for_activate, row);
+        }
     });
 
     let model_for_context = model.clone();
@@ -350,6 +389,10 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
     let model_for_keys = model.clone();
     let ui_for_keys = ui.clone();
     key_controller.connect_key_pressed(move |_, key, _, state| {
+        if key == gtk::gdk::Key::Escape {
+            ui_for_keys.table.clear_selection();
+            return glib::Propagation::Stop;
+        }
         if key == gtk::gdk::Key::space && toggle_selected_collapsed(&model_for_keys, &ui_for_keys) {
             return glib::Propagation::Stop;
         }
@@ -372,10 +415,11 @@ fn active_view_is_hardware(ui: &Ui) -> bool {
 }
 
 fn toggle_selected_collapsed(model: &SharedModel, ui: &Ui) -> bool {
-    let Some(row) = ui.table.selected_row() else {
+    let selected = ui.table.selected_rows();
+    let [row] = selected.as_slice() else {
         return false;
     };
-    toggle_row_collapsed(model, ui, &row)
+    toggle_row_collapsed(model, ui, row)
 }
 
 fn toggle_row_collapsed(model: &SharedModel, ui: &Ui, row: &SensorRow) -> bool {
@@ -393,35 +437,39 @@ fn toggle_row_collapsed(model: &SharedModel, ui: &Ui, row: &SensorRow) -> bool {
 }
 
 fn toggle_row_favorite(model: &SharedModel, ui: &Ui, row: &SensorRow) {
-    if row.kind != RowKind::Sensor {
-        return;
+    if row.kind == RowKind::Sensor {
+        set_sensor_rows_favorite(model, ui, std::slice::from_ref(row), !row.favorite);
     }
-    model
-        .borrow_mut()
-        .settings
-        .visibility
-        .toggle_favorite(row.hide_key.clone());
-    save_settings(model, ui);
-    rebuild_rows(model, ui);
 }
 
-fn rename_sensor_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
-    if row.kind != RowKind::Sensor {
+fn rename_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
+    if !matches!(row.kind, RowKind::Device | RowKind::Sensor) {
         return;
     }
-    let key = row.hide_key.clone();
+    let kind = row.kind;
+    let key = if kind == RowKind::Device {
+        row.device_id.clone()
+    } else {
+        row.hide_key.clone()
+    };
     let original_label = row.original_label.clone();
     let model_after_apply = model.clone();
     let ui_after_apply = ui.clone();
-    dialogs::show_sensor_alias(&ui.window, row, move |alias| {
+    dialogs::show_row_alias(&ui.window, row, move |alias| {
         let mut borrowed = model_after_apply.borrow_mut();
-        match alias.map(|value| value.trim().to_owned()) {
-            Some(value) if !value.is_empty() && value != original_label => {
-                borrowed.settings.sensor_aliases.insert(key.clone(), value);
-            }
-            _ => {
-                borrowed.settings.sensor_aliases.remove(&key);
-            }
+        let alias = match alias.map(|value| value.trim().to_owned()) {
+            Some(value) if !value.is_empty() && value != original_label => Some(value),
+            _ => None,
+        };
+        let aliases = if kind == RowKind::Device {
+            &mut borrowed.settings.device_aliases
+        } else {
+            &mut borrowed.settings.sensor_aliases
+        };
+        if let Some(alias) = alias {
+            aliases.insert(key.clone(), alias);
+        } else {
+            aliases.remove(&key);
         }
         drop(borrowed);
         save_settings(&model_after_apply, &ui_after_apply);
@@ -429,12 +477,30 @@ fn rename_sensor_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
     });
 }
 
-fn hide_sensor_row(model: &SharedModel, ui: &Ui, row: &SensorRow) {
-    model
-        .borrow_mut()
-        .settings
-        .visibility
-        .hide(row.hide_key.clone(), row.label.clone());
+fn hide_sensor_rows(model: &SharedModel, ui: &Ui, rows: &[SensorRow]) {
+    {
+        let mut borrowed = model.borrow_mut();
+        for row in rows {
+            borrowed
+                .settings
+                .visibility
+                .hide(row.hide_key.clone(), row.label.clone());
+        }
+    }
+    save_settings(model, ui);
+    rebuild_rows(model, ui);
+}
+
+fn set_sensor_rows_favorite(model: &SharedModel, ui: &Ui, rows: &[SensorRow], favorite: bool) {
+    {
+        let mut borrowed = model.borrow_mut();
+        for row in rows {
+            borrowed
+                .settings
+                .visibility
+                .set_favorite(row.hide_key.clone(), favorite);
+        }
+    }
     save_settings(model, ui);
     rebuild_rows(model, ui);
 }
@@ -507,6 +573,12 @@ fn show_sensor_context_menu(
     x: f64,
     y: f64,
 ) {
+    let selected = ui.table.selected_rows();
+    if selected.len() > 1 && selected.iter().all(|row| row.kind == RowKind::Sensor) {
+        show_multi_sensor_context_menu(model, ui, selected, anchor, x, y);
+        return;
+    }
+
     let popover = gtk::Popover::new();
     popover.add_css_class("menu");
     popover.set_has_arrow(true);
@@ -574,12 +646,14 @@ fn show_sensor_context_menu(
             },
             move || toggle_row_favorite(&model_for_favorite, &ui_for_favorite, &row_for_favorite),
         );
+    }
 
+    if matches!(row.kind, RowKind::Device | RowKind::Sensor) {
         let model_for_rename = model.clone();
         let ui_for_rename = ui.clone();
         let row_for_rename = row.clone();
         append_context_action(&menu, &popover, "Rename", move || {
-            rename_sensor_row(&model_for_rename, &ui_for_rename, row_for_rename.clone());
+            rename_row(&model_for_rename, &ui_for_rename, row_for_rename.clone());
         });
     }
 
@@ -587,8 +661,97 @@ fn show_sensor_context_menu(
     let ui_for_hide = ui.clone();
     let row_for_hide = row;
     append_context_action(&menu, &popover, "Hide", move || {
-        hide_sensor_row(&model_for_hide, &ui_for_hide, &row_for_hide);
+        hide_sensor_rows(
+            &model_for_hide,
+            &ui_for_hide,
+            std::slice::from_ref(&row_for_hide),
+        );
     });
+
+    popover.set_child(Some(&menu));
+    popover.connect_closed(|popover| popover.unparent());
+    popover.popup();
+}
+
+fn show_multi_sensor_context_menu(
+    model: &SharedModel,
+    ui: &Ui,
+    rows: Vec<SensorRow>,
+    anchor: &gtk::Widget,
+    x: f64,
+    y: f64,
+) {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("menu");
+    popover.set_has_arrow(true);
+    popover.set_parent(anchor);
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+        x.max(0.0) as i32,
+        y.max(0.0) as i32,
+        1,
+        1,
+    )));
+
+    let menu = gtk::Box::new(Orientation::Vertical, 0);
+    menu.set_margin_top(4);
+    menu.set_margin_bottom(4);
+    menu.set_margin_start(4);
+    menu.set_margin_end(4);
+    let count = rows.len();
+
+    let model_for_details = model.clone();
+    let ui_for_details = ui.clone();
+    let rows_for_details = rows.clone();
+    append_context_action(
+        &menu,
+        &popover,
+        &format!("View details for {count} sensors"),
+        move || {
+            for row in rows_for_details.clone() {
+                show_details_for_row(&model_for_details, &ui_for_details, row);
+            }
+        },
+    );
+
+    let model_for_hide = model.clone();
+    let ui_for_hide = ui.clone();
+    let rows_for_hide = rows.clone();
+    append_context_action(
+        &menu,
+        &popover,
+        &format!("Hide {count} sensors"),
+        move || hide_sensor_rows(&model_for_hide, &ui_for_hide, &rows_for_hide),
+    );
+
+    let favorite_count = rows.iter().filter(|row| row.favorite).count();
+    if favorite_count < count {
+        let model_for_favorite = model.clone();
+        let ui_for_favorite = ui.clone();
+        let rows_for_favorite = rows.clone();
+        append_context_action(
+            &menu,
+            &popover,
+            &format!("Add {count} sensors to favorites"),
+            move || {
+                set_sensor_rows_favorite(
+                    &model_for_favorite,
+                    &ui_for_favorite,
+                    &rows_for_favorite,
+                    true,
+                )
+            },
+        );
+    }
+    if favorite_count > 0 {
+        let model_for_favorite = model.clone();
+        let ui_for_favorite = ui.clone();
+        append_context_action(
+            &menu,
+            &popover,
+            &format!("Remove {count} sensors from favorites"),
+            move || set_sensor_rows_favorite(&model_for_favorite, &ui_for_favorite, &rows, false),
+        );
+    }
 
     popover.set_child(Some(&menu));
     popover.connect_closed(|popover| popover.unparent());
@@ -617,16 +780,9 @@ fn append_context_action(
     menu.append(&button);
 }
 
-fn show_selected_details(model: &SharedModel, ui: &Ui) {
-    let Some(row) = ui.table.selected_row() else {
-        model.borrow_mut().notice = "Select a device or sensor to inspect".to_owned();
-        update_status(model, ui);
-        return;
-    };
-    show_details_for_row(model, ui, row);
-}
-
 fn show_details_for_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
+    let display_name = row.label.clone();
+    let generated_name = row.original_label.clone();
     let details = {
         let borrowed = model.borrow();
         let device = borrowed
@@ -768,7 +924,9 @@ fn show_details_for_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
             });
             update_status(model, ui);
         }
-        (Some(device), None, _, _, _, _, _) => show_device_details(model, ui, device),
+        (Some(device), None, _, _, _, _, _) => {
+            show_device_details(model, ui, device, display_name, generated_name)
+        }
         _ => {
             model.borrow_mut().notice = "The selected item is no longer available".to_owned();
             update_status(model, ui);
@@ -776,7 +934,13 @@ fn show_details_for_row(model: &SharedModel, ui: &Ui, row: SensorRow) {
     }
 }
 
-fn show_device_details(model: &SharedModel, ui: &Ui, device: Device) {
+fn show_device_details(
+    model: &SharedModel,
+    ui: &Ui,
+    device: Device,
+    display_name: String,
+    generated_name: String,
+) {
     let existing = {
         let mut borrowed = model.borrow_mut();
         borrowed
@@ -814,6 +978,8 @@ fn show_device_details(model: &SharedModel, ui: &Ui, device: Device) {
     let window = dialogs::show_device_details(
         &ui.window,
         device,
+        display_name,
+        generated_name,
         refreshable,
         read_live,
         move |device_id, elevated| {
@@ -930,6 +1096,7 @@ fn connect_view_switching(model: &SharedModel, ui: &Ui) {
     let ui_for_switch = ui.clone();
     ui.content_stack
         .connect_visible_child_name_notify(move |_| {
+            ui_for_switch.table.clear_selection();
             let hardware = active_view_is_hardware(&ui_for_switch);
             ui_for_switch.sensor_controls.set_visible(!hardware);
             ui_for_switch.search.set_placeholder_text(Some(if hardware {
@@ -982,6 +1149,7 @@ fn sync_hardware(model: &SharedModel, ui: &Ui) {
         build_hardware_inventory(
             borrowed.session.snapshot(),
             borrowed.session.statistics(),
+            &borrowed.settings.device_aliases,
             &borrowed.settings.sensor_aliases,
             &borrowed.settings.sensor_alerts,
             &alert_states,
@@ -1003,10 +1171,17 @@ fn connect_window_lifecycle(model: &SharedModel, ui: &Ui) {
     let model_for_close = model.clone();
     let ui_for_close = ui.clone();
     ui.window.connect_close_request(move |window| {
-        let (close_to_tray, tray_available) = {
+        let (reset_pending, close_to_tray, tray_available) = {
             let borrowed = model_for_close.borrow();
-            (borrowed.settings.close_to_tray, borrowed.tray.available)
+            (
+                borrowed.settings_reset_pending,
+                borrowed.settings.close_to_tray,
+                borrowed.tray.available,
+            )
         };
+        if reset_pending {
+            return glib::Propagation::Proceed;
+        }
         save_settings(&model_for_close, &ui_for_close);
         if close_to_tray && tray_available {
             window.hide();
@@ -1179,16 +1354,17 @@ fn rebuild_rows(model: &SharedModel, ui: &Ui) {
     if !ui.window.is_mapped() {
         return;
     }
-    let preserve = ui.table.selected_row().map(|row| row.id);
+    let preserve = ui.table.selected_ids();
     let scroll_position = ui.sensor_scroller.vadjustment().value();
     let rows = {
         let borrowed = model.borrow();
         let alert_states = borrowed.alerts.states();
-        build_sensor_rows(
+        build_sensor_rows_with_order(
             borrowed.session.snapshot(),
             borrowed.session.statistics(),
             RowOptions {
                 visibility: &borrowed.settings.visibility,
+                device_aliases: &borrowed.settings.device_aliases,
                 sensor_aliases: &borrowed.settings.sensor_aliases,
                 device_order: &borrowed.settings.device_order,
                 show_sensor_groups: borrowed.settings.show_sensor_groups,
@@ -1197,13 +1373,14 @@ fn rebuild_rows(model: &SharedModel, ui: &Ui) {
                 alert_rules: &borrowed.settings.sensor_alerts,
                 alert_states: &alert_states,
             },
+            &borrowed.settings.sensor_row_order,
         )
     };
     let visible_sensor_count = rows
         .iter()
         .filter(|row| row.kind == RowKind::Sensor)
         .count();
-    if ui.table.sync_rows(&rows, preserve.as_deref()) {
+    if ui.table.sync_rows(&rows, &preserve) {
         restore_scroll_position(&ui.sensor_scroller, scroll_position);
     }
     model.borrow_mut().visible_sensor_count = visible_sensor_count;
@@ -1339,11 +1516,12 @@ fn logging_rows(model: &SharedModel) -> Vec<SensorRow> {
         }
     };
     let alert_states = borrowed.alerts.states();
-    build_sensor_rows(
+    build_sensor_rows_with_order(
         borrowed.session.snapshot(),
         borrowed.session.statistics(),
         RowOptions {
             visibility: &visibility,
+            device_aliases: &borrowed.settings.device_aliases,
             sensor_aliases: &borrowed.settings.sensor_aliases,
             device_order: &borrowed.settings.device_order,
             show_sensor_groups: borrowed.settings.show_sensor_groups,
@@ -1352,6 +1530,7 @@ fn logging_rows(model: &SharedModel) -> Vec<SensorRow> {
             alert_rules: &borrowed.settings.sensor_alerts,
             alert_states: &alert_states,
         },
+        &borrowed.settings.sensor_row_order,
     )
 }
 

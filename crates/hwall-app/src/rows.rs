@@ -21,6 +21,8 @@ pub struct SensorRow {
     pub kind: RowKind,
     pub depth: u8,
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub original_label: String,
     pub current: String,
     pub minimum: String,
@@ -40,12 +42,22 @@ pub struct SensorRow {
     pub collapsed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SensorOrderEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub kind: RowKind,
+    pub depth: u8,
+    pub label: String,
+}
+
 struct SectionRow {
     id: String,
     device_id: String,
     kind: RowKind,
     depth: u8,
     label: String,
+    alias: Option<String>,
     original_label: String,
     status: String,
     collapsed: bool,
@@ -61,6 +73,7 @@ impl SensorRow {
             kind: section.kind,
             depth: section.depth,
             label: section.label,
+            alias: section.alias,
             original_label: section.original_label,
             current: String::new(),
             minimum: String::new(),
@@ -92,6 +105,7 @@ impl SensorRow {
 #[derive(Debug, Clone, Copy)]
 pub struct RowOptions<'a> {
     pub visibility: &'a VisibilityState,
+    pub device_aliases: &'a BTreeMap<String, String>,
     pub sensor_aliases: &'a BTreeMap<String, String>,
     pub device_order: &'a [String],
     pub show_sensor_groups: bool,
@@ -114,8 +128,18 @@ pub fn build_sensor_rows(
     statistics: &SnapshotStatistics,
     options: RowOptions<'_>,
 ) -> Vec<SensorRow> {
+    build_sensor_rows_with_order(snapshot, statistics, options, &[])
+}
+
+pub fn build_sensor_rows_with_order(
+    snapshot: &Snapshot,
+    statistics: &SnapshotStatistics,
+    options: RowOptions<'_>,
+    sensor_row_order: &[String],
+) -> Vec<SensorRow> {
     let RowOptions {
         visibility,
+        device_aliases,
         sensor_aliases,
         device_order,
         show_sensor_groups,
@@ -131,6 +155,7 @@ pub fn build_sensor_rows(
         alert_rules,
         alert_states,
     };
+    let sensor_order_positions = order_positions(sensor_row_order);
     let query = query.trim().to_lowercase();
     let mut rows = Vec::new();
 
@@ -139,13 +164,22 @@ pub fn build_sensor_rows(
             continue;
         }
         let device_key = format!("device:{}", device.id);
-        let device_label = device_display_label(device);
-        let device_matches = !query.is_empty() && device_label.to_lowercase().contains(&query);
+        let original_device_label = device_display_label(device);
+        let device_alias = device_aliases
+            .get(&device.id)
+            .filter(|alias| !alias.trim().is_empty())
+            .cloned();
+        let device_label = device_alias
+            .clone()
+            .unwrap_or_else(|| original_device_label.clone());
+        let device_matches = !query.is_empty()
+            && (device_label.to_lowercase().contains(&query)
+                || original_device_label.to_lowercase().contains(&query));
         if visibility.is_hidden(&device_key) {
             continue;
         }
 
-        let groups = grouped_sensors(device);
+        let groups = ordered_sensor_groups(device, &sensor_order_positions);
         let mut projected_groups = Vec::new();
         for (kind, sensors) in groups {
             let group_label = sensor_kind_name(kind);
@@ -194,7 +228,8 @@ pub fn build_sensor_rows(
             kind: RowKind::Device,
             depth: 0,
             label: device_label,
-            original_label: device.name.clone(),
+            alias: device_alias,
+            original_label: original_device_label,
             status: device.driver.clone().unwrap_or_default(),
             collapsed: device_collapsed,
         }));
@@ -212,6 +247,7 @@ pub fn build_sensor_rows(
                     kind: RowKind::Header,
                     depth: 1,
                     label: label.clone(),
+                    alias: None,
                     original_label: label,
                     status: format!("{} sensors", projected.len()),
                     collapsed: group_collapsed,
@@ -229,12 +265,77 @@ pub fn build_sensor_rows(
 pub fn ordered_device_entries(
     snapshot: &Snapshot,
     device_order: &[String],
+    device_aliases: &BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
     ordered_devices(snapshot, device_order)
         .into_iter()
         .filter(|device| !device.sensors.is_empty())
-        .map(|device| (device.id.clone(), device_display_label(device)))
+        .map(|device| {
+            let generated = device_display_label(device);
+            let label = device_aliases
+                .get(&device.id)
+                .filter(|alias| !alias.trim().is_empty())
+                .cloned()
+                .unwrap_or(generated);
+            (device.id.clone(), label)
+        })
         .collect()
+}
+
+pub fn sensor_order_entries(
+    snapshot: &Snapshot,
+    device_order: &[String],
+    sensor_row_order: &[String],
+    device_aliases: &BTreeMap<String, String>,
+    sensor_aliases: &BTreeMap<String, String>,
+) -> Vec<SensorOrderEntry> {
+    let positions = order_positions(sensor_row_order);
+    let mut entries = Vec::new();
+    for device in ordered_devices(snapshot, device_order)
+        .into_iter()
+        .filter(|device| !device.sensors.is_empty())
+    {
+        let generated = device_display_label(device);
+        let label = device_aliases
+            .get(&device.id)
+            .filter(|alias| !alias.trim().is_empty())
+            .cloned()
+            .unwrap_or(generated);
+        entries.push(SensorOrderEntry {
+            id: device.id.clone(),
+            parent_id: None,
+            kind: RowKind::Device,
+            depth: 0,
+            label,
+        });
+
+        for (kind, sensors) in ordered_sensor_groups(device, &positions) {
+            let group_key = format!("group:{}:{}", device.id, kind.as_str());
+            entries.push(SensorOrderEntry {
+                id: group_key.clone(),
+                parent_id: Some(device.id.clone()),
+                kind: RowKind::Header,
+                depth: 1,
+                label: sensor_kind_name(kind).to_owned(),
+            });
+            for sensor in sensors {
+                let key = sensor_key(&device.id, &sensor.id);
+                let label = sensor_aliases
+                    .get(&key)
+                    .filter(|alias| !alias.trim().is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| sensor.label.clone());
+                entries.push(SensorOrderEntry {
+                    id: key,
+                    parent_id: Some(group_key.clone()),
+                    kind: RowKind::Sensor,
+                    depth: 2,
+                    label,
+                });
+            }
+        }
+    }
+    entries
 }
 
 fn ordered_devices<'a>(snapshot: &'a Snapshot, device_order: &[String]) -> Vec<&'a Device> {
@@ -263,12 +364,44 @@ fn ordered_devices<'a>(snapshot: &'a Snapshot, device_order: &[String]) -> Vec<&
     devices.into_iter().map(|(_, _, device)| device).collect()
 }
 
-fn grouped_sensors(device: &Device) -> BTreeMap<SensorKind, Vec<&Sensor>> {
+fn order_positions(order: &[String]) -> HashMap<&str, usize> {
+    order
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id.as_str(), index))
+        .collect()
+}
+
+fn ordered_sensor_groups<'a>(
+    device: &'a Device,
+    positions: &HashMap<&str, usize>,
+) -> Vec<(SensorKind, Vec<&'a Sensor>)> {
     let mut groups: BTreeMap<SensorKind, Vec<&Sensor>> = BTreeMap::new();
     for sensor in &device.sensors {
         groups.entry(sensor.kind).or_default().push(sensor);
     }
+    let fallback = positions.len();
+    let mut groups = groups.into_iter().enumerate().collect::<Vec<_>>();
+    groups.sort_by_key(|(original_index, (kind, _))| {
+        let key = format!("group:{}:{}", device.id, kind.as_str());
+        (
+            positions
+                .get(key.as_str())
+                .copied()
+                .unwrap_or(fallback + *original_index),
+            *original_index,
+        )
+    });
     groups
+        .into_iter()
+        .map(|(_, (kind, mut sensors))| {
+            sensors.sort_by_key(|sensor| {
+                let key = sensor_key(&device.id, &sensor.id);
+                positions.get(key.as_str()).copied().unwrap_or(fallback)
+            });
+            (kind, sensors)
+        })
+        .collect()
 }
 
 fn sensor_row(
@@ -291,6 +424,12 @@ fn sensor_row(
         state,
     );
 
+    let alias = context
+        .sensor_aliases
+        .get(sensor_key)
+        .filter(|alias| !alias.trim().is_empty())
+        .cloned();
+
     SensorRow {
         id: sensor_key.to_owned(),
         device_id: device.id.clone(),
@@ -298,12 +437,8 @@ fn sensor_row(
         hide_key: sensor_key.to_owned(),
         kind: RowKind::Sensor,
         depth,
-        label: context
-            .sensor_aliases
-            .get(sensor_key)
-            .filter(|alias| !alias.trim().is_empty())
-            .cloned()
-            .unwrap_or_else(|| sensor.label.clone()),
+        label: alias.clone().unwrap_or_else(|| sensor.label.clone()),
+        alias,
         original_label: sensor.label.clone(),
         current: presentation.current,
         minimum: presentation.minimum,
@@ -405,6 +540,7 @@ mod tests {
             &SnapshotStatistics::default(),
             RowOptions {
                 visibility: &VisibilityState::default(),
+                device_aliases: &BTreeMap::new(),
                 sensor_aliases: &BTreeMap::new(),
                 device_order: &["gpu:0".to_owned(), "cpu:0".to_owned()],
                 show_sensor_groups: false,
@@ -423,12 +559,103 @@ mod tests {
     }
 
     #[test]
+    fn custom_group_and_sensor_order_is_applied() {
+        let mut device = Device::new("cpu:0", DeviceClass::Cpu, "Processor");
+        device.sensors.push(Sensor::new(
+            "temp:0",
+            "Package temperature",
+            SensorKind::Temperature,
+            Unit::Celsius,
+            Some(42.0),
+            "/test/temp0",
+            Identification::KernelLabel,
+        ));
+        device.sensors.push(Sensor::new(
+            "temp:1",
+            "Core temperature",
+            SensorKind::Temperature,
+            Unit::Celsius,
+            Some(40.0),
+            "/test/temp1",
+            Identification::KernelLabel,
+        ));
+        device.sensors.push(Sensor::new(
+            "clock:0",
+            "Package clock",
+            SensorKind::Frequency,
+            Unit::Hertz,
+            Some(3_000_000_000.0),
+            "/test/clock0",
+            Identification::KernelLabel,
+        ));
+        let mut current = Snapshot::new();
+        current.devices.push(device);
+        let order = vec![
+            "group:cpu:0:frequency".to_owned(),
+            "sensor:cpu:0:clock:0".to_owned(),
+            "group:cpu:0:temperature".to_owned(),
+            "sensor:cpu:0:temp:1".to_owned(),
+            "sensor:cpu:0:temp:0".to_owned(),
+        ];
+
+        let rows = build_sensor_rows_with_order(
+            &current,
+            &SnapshotStatistics::default(),
+            RowOptions {
+                visibility: &VisibilityState::default(),
+                device_aliases: &BTreeMap::new(),
+                sensor_aliases: &BTreeMap::new(),
+                device_order: &[],
+                show_sensor_groups: true,
+                query: "",
+                favorites_only: false,
+                alert_rules: &BTreeMap::new(),
+                alert_states: &BTreeMap::new(),
+            },
+            &order,
+        );
+        let labels = rows
+            .iter()
+            .skip(1)
+            .map(|row| row.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec![
+                "Clocks",
+                "Package clock",
+                "Temperatures",
+                "Core temperature",
+                "Package temperature",
+            ]
+        );
+    }
+
+    #[test]
+    fn order_entries_use_aliases_without_changing_stable_ids() {
+        let device_aliases = BTreeMap::from([("cpu:0".to_owned(), "Main processor".to_owned())]);
+        let sensor_aliases =
+            BTreeMap::from([("sensor:cpu:0:temp:0".to_owned(), "CPU package".to_owned())]);
+        let entries = sensor_order_entries(&snapshot(), &[], &[], &device_aliases, &sensor_aliases);
+
+        assert!(entries.iter().any(|entry| {
+            entry.id == "cpu:0" && entry.parent_id.is_none() && entry.label == "Main processor"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.id == "sensor:cpu:0:temp:0"
+                && entry.parent_id.as_deref() == Some("group:cpu:0:temperature")
+                && entry.label == "CPU package"
+        }));
+    }
+
+    #[test]
     fn groups_are_flattened_by_default() {
         let rows = build_sensor_rows(
             &snapshot(),
             &SnapshotStatistics::default(),
             RowOptions {
                 visibility: &VisibilityState::default(),
+                device_aliases: &BTreeMap::new(),
                 sensor_aliases: &BTreeMap::new(),
                 device_order: &[],
                 show_sensor_groups: false,
@@ -454,6 +681,7 @@ mod tests {
             &SnapshotStatistics::default(),
             RowOptions {
                 visibility: &VisibilityState::default(),
+                device_aliases: &BTreeMap::new(),
                 sensor_aliases: &aliases,
                 device_order: &[],
                 show_sensor_groups: false,
@@ -469,6 +697,47 @@ mod tests {
             .expect("CPU sensor row");
         assert_eq!(sensor.label, "CPU package");
         assert_eq!(sensor.original_label, "CPU temperature");
+    }
+
+    #[test]
+    fn device_aliases_keep_generated_names_searchable_and_exported_separately() {
+        let aliases = BTreeMap::from([("cpu:0".to_owned(), "Main processor".to_owned())]);
+        let build = |query| {
+            build_sensor_rows(
+                &snapshot(),
+                &SnapshotStatistics::default(),
+                RowOptions {
+                    visibility: &VisibilityState::default(),
+                    device_aliases: &aliases,
+                    sensor_aliases: &BTreeMap::new(),
+                    device_order: &[],
+                    show_sensor_groups: false,
+                    query,
+                    favorites_only: false,
+                    alert_rules: &BTreeMap::new(),
+                    alert_states: &BTreeMap::new(),
+                },
+            )
+        };
+
+        let rows = build("");
+        let device = rows
+            .iter()
+            .find(|row| row.kind == RowKind::Device && row.device_id == "cpu:0")
+            .expect("CPU device row");
+        assert_eq!(device.id, "device:cpu:0");
+        assert_eq!(device.label, "Main processor");
+        assert_eq!(device.alias.as_deref(), Some("Main processor"));
+        assert_eq!(device.original_label, "Processor");
+        let json = serde_json::to_value(device).expect("serialize device row");
+        assert_eq!(json["alias"].as_str(), Some("Main processor"));
+        assert_eq!(json["original_label"].as_str(), Some("Processor"));
+
+        for query in ["main processor", "processor"] {
+            assert!(build(query)
+                .iter()
+                .any(|row| row.kind == RowKind::Sensor && row.device_id == "cpu:0"));
+        }
     }
 
     #[test]
@@ -497,6 +766,7 @@ mod tests {
             &SnapshotStatistics::default(),
             RowOptions {
                 visibility: &VisibilityState::default(),
+                device_aliases: &BTreeMap::new(),
                 sensor_aliases: &BTreeMap::new(),
                 device_order: &[],
                 show_sensor_groups: false,
@@ -543,6 +813,7 @@ mod tests {
             &SnapshotStatistics::default(),
             RowOptions {
                 visibility: &VisibilityState::default(),
+                device_aliases: &BTreeMap::new(),
                 sensor_aliases: &BTreeMap::new(),
                 device_order: &[],
                 show_sensor_groups: false,
@@ -582,6 +853,7 @@ mod tests {
             &statistics,
             RowOptions {
                 visibility: &VisibilityState::default(),
+                device_aliases: &BTreeMap::new(),
                 sensor_aliases: &BTreeMap::new(),
                 device_order: &[],
                 show_sensor_groups: false,
@@ -618,6 +890,7 @@ mod tests {
             &SnapshotStatistics::default(),
             RowOptions {
                 visibility: &VisibilityState::default(),
+                device_aliases: &BTreeMap::new(),
                 sensor_aliases: &BTreeMap::new(),
                 device_order: &[],
                 show_sensor_groups: true,
