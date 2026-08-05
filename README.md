@@ -19,6 +19,7 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 - Hardware inventory for processors, memory, graphics, storage, network, USB, PCI, batteries, firmware, and supported security devices
 - Optional SMART and NVMe health information
 - Human-readable reports, filtered sensor output, JSON export, JSON Lines streaming, and an interactive terminal monitor
+- HTTP JSON API: Serve the latest sensor, mixed, or hardware snapshot over HTTP with a configurable address and refresh interval
 
 ## Hardware support
 
@@ -191,17 +192,25 @@ Examples:
 ```bash
 hwall-cli sensors --class cpu
 hwall-cli sensors --class cpu --kind effective-clock
-curl http://127.0.0.1:8765/
-hwall-cli serve --view mixed
 hwall-cli sensors --device nvme --format json
+
 hwall-cli watch --interval 500ms
 hwall-cli watch --view hardware
 hwall-cli watch --jsonl --interval 1s
+
 hwall-cli --health report
 hwall-cli --no-helpers report
+
+hwall-cli serve
+curl http://127.0.0.1:8765/
 ```
 
+### HTTP API (serve)
 The HTTP server exposes one JSON document at `/`. Its default `sensors` view returns a flat `sensors` array for dashboards and other integrations. Use `--view mixed` for the complete snapshot or `--view hardware` for inventory without sensor arrays.
+```bash
+hwall-cli serve
+curl http://127.0.0.1:8765/
+```
 
 ## Additional notes
 
