@@ -1,4 +1,5 @@
 mod sensors;
+mod serve;
 mod tui;
 mod watch;
 
@@ -56,6 +57,9 @@ enum Command {
 
     /// Open an interactive, continuously updating terminal monitor.
     Watch(WatchArgs),
+
+    /// Serve the latest JSON view over HTTP.
+    Serve(serve::ServeArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -132,6 +136,13 @@ fn main() -> ExitCode {
         Some(Command::Export { pretty }) => export_snapshot(base_options, pretty),
         Some(Command::Sensors(args)) => sensors::run(args, base_options),
         Some(Command::Watch(args)) => run_watch(base_options, args),
+        Some(Command::Serve(args)) => match serve::run(base_options, args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("HTTP server failed: {error}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 

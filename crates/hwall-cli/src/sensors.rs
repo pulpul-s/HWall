@@ -342,8 +342,31 @@ fn write_delimited(mut out: impl Write, records: &[Record<'_>], delimiter: char)
     Ok(())
 }
 
+pub(crate) fn json_value(snapshot: &Snapshot) -> Value {
+    let records = records(
+        snapshot,
+        Filters {
+            class: None,
+            device: None,
+            kind: None,
+            status: None,
+        },
+    );
+    json!({
+        "schema_version": snapshot.schema_version,
+        "captured_at_unix_ms": snapshot.captured_at_unix_ms,
+        "sensors": record_values(&records),
+        "warnings": &snapshot.warnings,
+    })
+}
+
 fn write_json(mut out: impl Write, records: &[Record<'_>]) -> io::Result<()> {
-    let values: Vec<Value> = records
+    serde_json::to_writer_pretty(&mut out, &record_values(records)).map_err(io::Error::other)?;
+    writeln!(out)
+}
+
+fn record_values(records: &[Record<'_>]) -> Vec<Value> {
+    records
         .iter()
         .map(|record| {
             json!({
@@ -362,9 +385,7 @@ fn write_json(mut out: impl Write, records: &[Record<'_>]) -> io::Result<()> {
                 "last_updated_unix_ms": record.last_updated_unix_ms,
             })
         })
-        .collect();
-    serde_json::to_writer_pretty(&mut out, &values).map_err(io::Error::other)?;
-    writeln!(out)
+        .collect()
 }
 
 fn status_name(record: &Record<'_>) -> String {

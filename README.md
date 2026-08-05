@@ -181,6 +181,9 @@ hwall-cli sensors
 hwall-cli watch --view sensors
 hwall-cli watch --view hardware
 hwall-cli export --pretty
+hwall-cli serve --listen 127.0.0.1:8765 --interval 1s
+hwall-cli serve --view mixed
+hwall-cli serve --view hardware
 ```
 
 Examples:
@@ -188,6 +191,8 @@ Examples:
 ```bash
 hwall-cli sensors --class cpu
 hwall-cli sensors --class cpu --kind effective-clock
+curl http://127.0.0.1:8765/
+hwall-cli serve --view mixed
 hwall-cli sensors --device nvme --format json
 hwall-cli watch --interval 500ms
 hwall-cli watch --view hardware
@@ -195,6 +200,8 @@ hwall-cli watch --jsonl --interval 1s
 hwall-cli --health report
 hwall-cli --no-helpers report
 ```
+
+The HTTP server exposes one JSON document at `/`. Its default `sensors` view returns a flat `sensors` array for dashboards and other integrations. Use `--view mixed` for the complete snapshot or `--view hardware` for inventory without sensor arrays.
 
 ## Additional notes
 
