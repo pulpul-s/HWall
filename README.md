@@ -220,6 +220,7 @@ curl http://127.0.0.1:8765/
 - In the GTK settings, **Theme** can follow the system preference or force light or dark Adwaita styling.
 - **Show identifying information** enables available serial numbers, UUIDs, WWNs, MAC addresses, and related identifiers, then performs a hardware rediscovery.
 - **Keep sensor history** controls both the global in-memory retention period and the default chart range for newly opened sensor Details windows. The default is 1 minute; the shared limit is 24 hours.
+- Development of HWall has been assisted by AI tools.
 
 ### Hardware monitoring notice
 
