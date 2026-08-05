@@ -61,6 +61,8 @@ sudo sysctl kernel.perf_event_paranoid=0
 
 This permits local users to perform system-wide performance monitoring. Review the Linux kernel [`perf_event_paranoid` sysctl guide](https://docs.kernel.org/admin-guide/sysctl/kernel.html#perf-event-paranoid) and enable it only when that access is acceptable.
 
+Setting kernel.perf_event_paranoid=1 may also provide access to the required energy counters on some systems. This configuration has not been widely tested.
+
 
 ### Optional runtime helpers
 
