@@ -1,5 +1,5 @@
 use super::ownership::{
-    configure_hwmon_device, default_sensor_label, hwmon_display_name, resolve_device, DriverProfile,
+    DriverProfile, configure_hwmon_device, default_sensor_label, hwmon_display_name, resolve_device,
 };
 use super::util::{
     canonical, command_exists, humanize_token, list_dirs, list_entries, pci_address_from_path,
@@ -160,14 +160,15 @@ fn collect_chip(builder: &mut SnapshotBuilder, root: &Path, libsensors: &[LibSen
                 .metadata
                 .insert("hwmon_channel".to_owned(), u64::from(channel).into());
         }
-        if spec.kind == SensorKind::Energy && !spec.is_average {
-            if let Some(raw_counter) = read_u64(&path) {
-                let counter_key = format!("hwmon_energy_uj:{sensor_id}");
-                device.counters.insert(counter_key.clone(), raw_counter);
-                sensor
-                    .metadata
-                    .insert("energy_counter_key".to_owned(), counter_key.into());
-            }
+        if spec.kind == SensorKind::Energy
+            && !spec.is_average
+            && let Some(raw_counter) = read_u64(&path)
+        {
+            let counter_key = format!("hwmon_energy_uj:{sensor_id}");
+            device.counters.insert(counter_key.clone(), raw_counter);
+            sensor
+                .metadata
+                .insert("energy_counter_key".to_owned(), counter_key.into());
         }
         if spec.is_average {
             sensor

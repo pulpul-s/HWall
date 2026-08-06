@@ -1,5 +1,5 @@
 use crate::history::{HistoryStore, SharedHistory};
-use hwall_app::{LogWorker, SensorRow, MIN_REFRESH_INTERVAL_MS};
+use hwall_app::{LogWorker, MIN_REFRESH_INTERVAL_MS, SensorRow};
 use hwall_core::{
     CollectOptions, CollectionProfile, MonitorCollector, MonitorPoll, MonitorRequestResult,
     MonitorWorker, Snapshot, SnapshotStatistics,
@@ -239,19 +239,19 @@ impl Session {
             return;
         }
 
-        if self.in_flight_health_refresh.is_none() {
-            if let Some(pending) = self.pending_health_refresh.clone() {
-                let elevated = pending.reason == HealthRefreshReason::ElevatedManual;
-                match worker.request_storage_health(pending.device_ids.clone(), elevated) {
-                    MonitorRequestResult::Accepted => {
-                        self.in_flight_health_refresh = Some(pending);
-                        self.pending_health_refresh = None;
-                    }
-                    MonitorRequestResult::Busy => {}
-                    MonitorRequestResult::Disconnected => self.disconnected = true,
+        if self.in_flight_health_refresh.is_none()
+            && let Some(pending) = self.pending_health_refresh.clone()
+        {
+            let elevated = pending.reason == HealthRefreshReason::ElevatedManual;
+            match worker.request_storage_health(pending.device_ids.clone(), elevated) {
+                MonitorRequestResult::Accepted => {
+                    self.in_flight_health_refresh = Some(pending);
+                    self.pending_health_refresh = None;
                 }
-                return;
+                MonitorRequestResult::Busy => {}
+                MonitorRequestResult::Disconnected => self.disconnected = true,
             }
+            return;
         }
 
         if self.paused || self.refresh_in_flight {

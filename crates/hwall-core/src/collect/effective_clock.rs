@@ -772,24 +772,30 @@ mod platform {
 
         #[test]
         fn rejects_regressions_asymmetric_counters_and_impossible_results() {
-            assert!(effective_clock(
-                reading(100, 100, 100, 100),
-                reading(99, 101, 200, 200),
-                Duration::from_secs(1),
-            )
-            .is_none());
-            assert!(effective_clock(
-                reading(100, 100, 100, 100),
-                reading(100, 101, 200, 200),
-                Duration::from_secs(1),
-            )
-            .is_none());
-            assert!(effective_clock(
-                reading(0, 0, 0, 0),
-                reading(200_000_000_000, 200_000_000_000, 1, 1),
-                Duration::from_secs(1),
-            )
-            .is_none());
+            assert!(
+                effective_clock(
+                    reading(100, 100, 100, 100),
+                    reading(99, 101, 200, 200),
+                    Duration::from_secs(1),
+                )
+                .is_none()
+            );
+            assert!(
+                effective_clock(
+                    reading(100, 100, 100, 100),
+                    reading(100, 101, 200, 200),
+                    Duration::from_secs(1),
+                )
+                .is_none()
+            );
+            assert!(
+                effective_clock(
+                    reading(0, 0, 0, 0),
+                    reading(200_000_000_000, 200_000_000_000, 1, 1),
+                    Duration::from_secs(1),
+                )
+                .is_none()
+            );
         }
 
         #[test]

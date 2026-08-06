@@ -2,8 +2,8 @@ use crate::ui::{attach_labeled, set_label_text};
 use gtk::prelude::*;
 use gtk::{CheckButton, Dialog, Grid, Label, ResponseType, Window};
 use hwall_app::{
-    alert_direction, unit_suffix, valid_alert_color, AlertDirection, AlertRule,
-    DEFAULT_CRITICAL_COLOR, DEFAULT_WARNING_COLOR,
+    AlertDirection, AlertRule, DEFAULT_CRITICAL_COLOR, DEFAULT_WARNING_COLOR, alert_direction,
+    unit_suffix, valid_alert_color,
 };
 use hwall_core::{SensorKind, Unit};
 
@@ -287,25 +287,25 @@ fn validate_threshold_order(
     warning_above: Option<f64>,
     critical_above: Option<f64>,
 ) -> Result<(), String> {
-    if let (Some(warning), Some(critical)) = (warning_below, critical_below) {
-        if critical > warning {
-            return Err("Critical below must not be higher than Warning below.".to_owned());
-        }
+    if let (Some(warning), Some(critical)) = (warning_below, critical_below)
+        && critical > warning
+    {
+        return Err("Critical below must not be higher than Warning below.".to_owned());
     }
-    if let (Some(warning), Some(critical)) = (warning_above, critical_above) {
-        if critical < warning {
-            return Err("Critical above must not be lower than Warning above.".to_owned());
-        }
+    if let (Some(warning), Some(critical)) = (warning_above, critical_above)
+        && critical < warning
+    {
+        return Err("Critical above must not be lower than Warning above.".to_owned());
     }
-    if let (Some(below), Some(above)) = (warning_below, warning_above) {
-        if below >= above {
-            return Err("Warning below must be lower than Warning above.".to_owned());
-        }
+    if let (Some(below), Some(above)) = (warning_below, warning_above)
+        && below >= above
+    {
+        return Err("Warning below must be lower than Warning above.".to_owned());
     }
-    if let (Some(below), Some(above)) = (critical_below, critical_above) {
-        if below >= above {
-            return Err("Critical below must be lower than Critical above.".to_owned());
-        }
+    if let (Some(below), Some(above)) = (critical_below, critical_above)
+        && below >= above
+    {
+        return Err("Critical below must be lower than Critical above.".to_owned());
     }
     Ok(())
 }

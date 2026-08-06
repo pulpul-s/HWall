@@ -7,21 +7,21 @@
 use crate::collect::effective_clock::EffectiveClockCollector;
 use crate::collect::energy::EnergyCollector;
 use crate::collect::{
-    collect_snapshot, collect_storage_health_targets, reconcile_snapshot, storage_health_target,
-    CollectOptions, CollectionProfile,
+    CollectOptions, CollectionProfile, collect_snapshot, collect_storage_health_targets,
+    reconcile_snapshot, storage_health_target,
 };
 use crate::model::{
-    CollectorId, Device, ReadingFreshness, Sensor, SensorKind, Snapshot, StorageHealthAvailability,
-    STORAGE_HEALTH_PROPERTY_KEYS,
+    CollectorId, Device, ReadingFreshness, STORAGE_HEALTH_PROPERTY_KEYS, Sensor, SensorKind,
+    Snapshot, StorageHealthAvailability,
 };
 use crate::telemetry::TelemetryDeriver;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -765,10 +765,10 @@ fn merge_storage_health_cache(previous: &Snapshot, refreshed: &mut Snapshot) {
 
 fn copy_storage_health_data(source: &crate::model::Device, target: &mut crate::model::Device) {
     for key in STORAGE_HEALTH_PROPERTY_KEYS {
-        if !target.properties.contains_key(*key) {
-            if let Some(value) = source.properties.get(*key) {
-                target.properties.insert((*key).to_owned(), value.clone());
-            }
+        if !target.properties.contains_key(*key)
+            && let Some(value) = source.properties.get(*key)
+        {
+            target.properties.insert((*key).to_owned(), value.clone());
         }
     }
     for sensor in &source.sensors {

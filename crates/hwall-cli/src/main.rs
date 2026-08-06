@@ -4,10 +4,10 @@ mod tui;
 mod watch;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use hwall_app::{render_terminal_view, TerminalView, MIN_REFRESH_INTERVAL_MS};
+use hwall_app::{MIN_REFRESH_INTERVAL_MS, TerminalView, render_terminal_view};
 use hwall_core::render;
 use hwall_core::{
-    collect_snapshot, CollectOptions, CollectionProfile, MonitorCollector, SnapshotStatistics,
+    CollectOptions, CollectionProfile, MonitorCollector, SnapshotStatistics, collect_snapshot,
 };
 use std::io::{self, IsTerminal};
 use std::process::ExitCode;

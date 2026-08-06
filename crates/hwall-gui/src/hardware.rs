@@ -2,8 +2,8 @@ use crate::ui::{copy_text, restore_scroll_position, set_label_text};
 use gtk::prelude::*;
 use gtk::{Align, Orientation, SelectionMode};
 use hwall_app::{
-    hardware_device_text, hardware_inventory_text, HardwareDevice, HardwareInventory,
-    HardwareProperty, HardwareSensor,
+    HardwareDevice, HardwareInventory, HardwareProperty, HardwareSensor, hardware_device_text,
+    hardware_inventory_text,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;

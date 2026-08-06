@@ -15,12 +15,12 @@ use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Orientation};
 use history::SensorKey;
 use hwall_app::{
-    alert_supported_sensor, build_hardware_inventory, build_sensor_rows_with_order,
-    default_log_directory, plasma_window_placement_supported, sensor_key, sensor_order_entries,
-    sync_plasma_window_placement, timestamped_log_path, AlertEngine, AlertEvent, AlertSeverity,
-    AppSettings, LogScope, RowKind, RowOptions, SensorRow, SettingsStore, APPLICATION_ID,
+    APPLICATION_ID, AlertEngine, AlertEvent, AlertSeverity, AppSettings, LogScope, RowKind,
+    RowOptions, SensorRow, SettingsStore, alert_supported_sensor, build_hardware_inventory,
+    build_sensor_rows_with_order, default_log_directory, plasma_window_placement_supported,
+    sensor_key, sensor_order_entries, sync_plasma_window_placement, timestamped_log_path,
 };
-use hwall_core::{supports_storage_health, Device, DeviceClass, Sensor};
+use hwall_core::{Device, DeviceClass, Sensor, supports_storage_health};
 use session::{Activity, HealthRefreshReason, Session};
 use std::cell::RefCell;
 use std::collections::BTreeMap;

@@ -1,4 +1,4 @@
-use crate::{alert_supported_sensor, AlertRule, AlertState};
+use crate::{AlertRule, AlertState, alert_supported_sensor};
 use hwall_core::render::{format_reading_age_compact, format_sample_age_compact, format_value};
 use hwall_core::{ReadingFreshness, RunningStatistics, Sensor, SensorStatus};
 

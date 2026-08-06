@@ -1,11 +1,11 @@
-use crate::{present_sensor, sensor_key, AlertRule, AlertState};
+use crate::{AlertRule, AlertState, present_sensor, sensor_key};
 use hwall_core::render::{
     format_property_value, format_sample_age, hardware_property_label,
     is_low_level_hardware_property, sensor_kind_name,
 };
 use hwall_core::{
-    is_storage_health_property, natural_cmp, supports_storage_health, Device, DeviceClass, Sensor,
-    Snapshot, SnapshotStatistics, StorageHealth, StorageHealthAvailability,
+    Device, DeviceClass, Sensor, Snapshot, SnapshotStatistics, StorageHealth,
+    StorageHealthAvailability, is_storage_health_property, natural_cmp, supports_storage_health,
 };
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -776,23 +776,22 @@ fn device_subtitle(device: &Device) -> String {
         };
     }
 
-    if device.class == DeviceClass::System {
-        if let Some(operating_system) = device
+    if device.class == DeviceClass::System
+        && let Some(operating_system) = device
             .property_str("os_pretty_name")
             .or_else(|| device.property_str("os_name"))
-        {
-            return operating_system.to_owned();
-        }
+    {
+        return operating_system.to_owned();
     }
 
     let mut values = Vec::new();
-    if device.class == DeviceClass::Memory && device.property_str("memory_role") == Some("module") {
-        if let Some(slot) = device
+    if device.class == DeviceClass::Memory
+        && device.property_str("memory_role") == Some("module")
+        && let Some(slot) = device
             .property_str("slot_label")
             .or_else(|| device.property_str("locator"))
-        {
-            values.push(slot.to_owned());
-        }
+    {
+        values.push(slot.to_owned());
     }
     for value in [
         device.vendor.as_deref(),
@@ -813,13 +812,11 @@ fn device_subtitle(device: &Device) -> String {
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        if !values
+        && !values
             .iter()
             .any(|known: &String| known.as_str() == bus_address)
-        {
-            values.push(bus_address.to_owned());
-        }
+    {
+        values.push(bus_address.to_owned());
     }
     if values.is_empty() {
         device.class.display_name().to_owned()
@@ -1162,10 +1159,12 @@ mod tests {
             .iter()
             .find(|section| section.title == "Identity")
             .expect("Identity section");
-        assert!(identity
-            .properties
-            .iter()
-            .any(|property| property.label == "Class" && property.value == "CPU"));
+        assert!(
+            identity
+                .properties
+                .iter()
+                .any(|property| property.label == "Class" && property.value == "CPU")
+        );
         assert_eq!(device.sensors[0].current, "50.0 °C");
         assert_eq!(device.sensors[0].status, "Normal");
         assert!(device.advanced.is_empty());
@@ -1459,10 +1458,11 @@ mod tests {
 
         let tpm = inventory.device("security:tpm:0").unwrap();
         assert_eq!(tpm.category, HardwareCategoryKind::Security);
-        assert!(tpm
-            .sections
-            .iter()
-            .any(|section| section.title == "Security"));
+        assert!(
+            tpm.sections
+                .iter()
+                .any(|section| section.title == "Security")
+        );
     }
 
     #[test]
@@ -1522,10 +1522,11 @@ mod tests {
             .iter()
             .find(|section| section.title == "Identity")
             .unwrap();
-        assert!(identity
-            .properties
-            .iter()
-            .any(|property| { property.label == "Chassis type" && property.value == "Desktop" }));
+        assert!(
+            identity.properties.iter().any(|property| {
+                property.label == "Chassis type" && property.value == "Desktop"
+            })
+        );
 
         let platform = board
             .sections
@@ -1542,10 +1543,12 @@ mod tests {
             ("SMBIOS version", "3.6.0"),
             ("UEFI support", "Yes"),
         ] {
-            assert!(platform
-                .properties
-                .iter()
-                .any(|property| property.label == label && property.value == value));
+            assert!(
+                platform
+                    .properties
+                    .iter()
+                    .any(|property| property.label == label && property.value == value)
+            );
         }
 
         assert!(inventory.device("bios:0").is_none());
@@ -1575,10 +1578,12 @@ mod tests {
             .iter()
             .find(|section| section.title == "Identity")
             .unwrap();
-        assert!(!identity
-            .properties
-            .iter()
-            .any(|property| property.label == "Model"));
+        assert!(
+            !identity
+                .properties
+                .iter()
+                .any(|property| property.label == "Model")
+        );
         assert!(firmware.sections.iter().any(|section| {
             section.title == "Firmware & platform"
                 && section

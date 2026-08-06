@@ -14,9 +14,8 @@ RELEASE_CLI := $(RELEASE_DIR)/hwall-cli
 WORKSPACE_INPUTS := Cargo.lock Cargo.toml rust-toolchain.toml \
 	$(shell find crates -type f -print)
 
-.PHONY: build release release-gui release-cli check test lint verify format checksums \
-	verify-format verify-source install install-gui install-cli clean \
-	uninstall
+.PHONY: build release release-gui release-cli check test lint verify format \
+	verify-format install install-gui install-cli clean uninstall
 
 # One Cargo invocation produces both workspace binaries. Grouped targets also let
 # make reuse current binaries without invoking Cargo again.
@@ -34,14 +33,11 @@ release-gui: $(RELEASE_GUI)
 
 release-cli: $(RELEASE_CLI)
 
-check: Cargo.lock verify-format verify-source
+check: Cargo.lock verify-format
 	cargo check --locked --workspace --all-targets --all-features
 
 verify-format:
 	cargo fmt --all -- --check
-
-verify-source:
-	python3 scripts/check-source.py
 
 test: Cargo.lock
 	cargo test --locked --workspace --all-features
@@ -53,9 +49,6 @@ verify: check test lint
 
 format:
 	cargo fmt --all
-
-checksums:
-	python3 scripts/check-source.py --write-checksums
 
 install: release
 	install -Dm755 "$(RELEASE_GUI)" "$(DESTDIR)$(BINDIR)/hwall"

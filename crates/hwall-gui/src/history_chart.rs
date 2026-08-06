@@ -1,17 +1,17 @@
 use crate::history::{
-    nearest_chart_point, ChartPoint, HistoryPoint, HistorySample, HistoryStore, SensorKey,
-    SharedHistory, MAX_HISTORY_RETENTION, MIN_HISTORY_RETENTION,
+    ChartPoint, HistoryPoint, HistorySample, HistoryStore, MAX_HISTORY_RETENTION,
+    MIN_HISTORY_RETENTION, SensorKey, SharedHistory, nearest_chart_point,
 };
 use gtk::cairo;
 use gtk::prelude::*;
 use gtk::{
-    glib, Align, Button, CheckButton, ComboBoxText, DrawingArea, EventControllerMotion,
+    Align, Button, CheckButton, ComboBoxText, DrawingArea, EventControllerMotion,
     EventControllerScroll, EventControllerScrollFlags, FileChooserAction, FileChooserNative,
-    GestureDrag, Label, Orientation, ResponseType, SpinButton, Window,
+    GestureDrag, Label, Orientation, ResponseType, SpinButton, Window, glib,
 };
-use hwall_app::{timestamped_log_path, LogFileWriter, LogFormat, SensorRow};
-use hwall_core::render::format_value;
+use hwall_app::{LogFileWriter, LogFormat, SensorRow, timestamped_log_path};
 use hwall_core::Unit;
+use hwall_core::render::format_value;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;

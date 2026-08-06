@@ -771,10 +771,12 @@ mod tests {
         apply(&mut snapshot);
 
         assert_eq!(snapshot.devices.len(), 3);
-        assert!(snapshot
-            .devices
-            .iter()
-            .any(|device| device.id == "memory:spd5118:0-0050"));
+        assert!(
+            snapshot
+                .devices
+                .iter()
+                .any(|device| device.id == "memory:spd5118:0-0050")
+        );
     }
 
     #[test]

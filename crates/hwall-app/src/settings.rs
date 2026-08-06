@@ -1,4 +1,4 @@
-use crate::{project_dirs, AlertRule, LogFormat, LogScope, VisibilityState};
+use crate::{AlertRule, LogFormat, LogScope, VisibilityState, project_dirs};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;

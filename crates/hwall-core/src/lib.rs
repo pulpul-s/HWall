@@ -9,7 +9,7 @@ pub mod render;
 pub mod statistics;
 mod telemetry;
 
-pub use collect::{collect_snapshot, supports_storage_health, CollectOptions, CollectionProfile};
+pub use collect::{CollectOptions, CollectionProfile, collect_snapshot, supports_storage_health};
 pub use model::*;
 pub use monitor::{
     MonitorCollector, MonitorPoll, MonitorRequestResult, MonitorUpdate, MonitorWorker,

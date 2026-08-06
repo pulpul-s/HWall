@@ -593,9 +593,11 @@ mod tests {
             .insert("intermittent".to_owned(), true.into());
         let mut engine = AlertEngine::default();
 
-        assert!(engine
-            .evaluate(&snapshot, &rules, Instant::now())
-            .is_empty());
+        assert!(
+            engine
+                .evaluate(&snapshot, &rules, Instant::now())
+                .is_empty()
+        );
         assert_eq!(engine.state(&key), AlertState::Normal);
     }
 
@@ -636,9 +638,11 @@ mod tests {
 
         let mut stale = snapshot(85.0);
         stale.devices[0].sensors[0].freshness = hwall_core::ReadingFreshness::Stale;
-        assert!(engine
-            .evaluate(&stale, &rules, start + Duration::from_secs(1))
-            .is_empty());
+        assert!(
+            engine
+                .evaluate(&stale, &rules, start + Duration::from_secs(1))
+                .is_empty()
+        );
         assert_eq!(engine.state(&key), AlertState::Suspended);
 
         let recovered = engine.evaluate(&snapshot(70.0), &rules, start + Duration::from_secs(2));
@@ -661,9 +665,11 @@ mod tests {
         engine.evaluate(&snapshot(85.0), &rules, start);
 
         let empty = Snapshot::new();
-        assert!(engine
-            .evaluate(&empty, &rules, start + Duration::from_secs(1))
-            .is_empty());
+        assert!(
+            engine
+                .evaluate(&empty, &rules, start + Duration::from_secs(1))
+                .is_empty()
+        );
         assert_eq!(engine.state(&key), AlertState::Suspended);
     }
 }

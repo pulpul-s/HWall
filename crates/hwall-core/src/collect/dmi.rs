@@ -1,5 +1,5 @@
 use super::memory::{locator_is_specific, slot_device_id};
-use super::util::{add_string, command_path, read_trimmed, run_command_configured, HELPER_TIMEOUT};
+use super::util::{HELPER_TIMEOUT, add_string, command_path, read_trimmed, run_command_configured};
 use crate::model::{Device, DeviceClass, PropertyValue, SnapshotBuilder};
 use std::collections::BTreeMap;
 use std::path::Path;

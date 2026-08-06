@@ -149,10 +149,13 @@ impl RowState {
         self.row = row.clone();
         for kind in DataColumn::ALL {
             let index = kind.index();
-            if let Some(label) = self.labels[index].as_ref().and_then(|weak| weak.upgrade()) {
-                render_label(kind, &self.row, &label);
-            } else {
-                self.labels[index] = None;
+            match self.labels[index].as_ref().and_then(|weak| weak.upgrade()) {
+                Some(label) => {
+                    render_label(kind, &self.row, &label);
+                }
+                _ => {
+                    self.labels[index] = None;
+                }
             }
         }
         match (
@@ -291,11 +294,10 @@ impl SensorTable {
             let Ok(boxed) = item.downcast::<glib::BoxedAnyObject>() else {
                 return false;
             };
-            let matches = {
+            {
                 let stored = boxed.borrow::<RowState>();
                 stored.row.id == row.id
-            };
-            matches
+            }
         })
     }
 

@@ -3,10 +3,10 @@ use hwall_core::render::{
     escape_delimited, format_reading_age_compact, format_value, sensor_kind_name,
 };
 use hwall_core::{
-    collect_snapshot, CollectOptions, DeviceClass, MonitorCollector, ReadingFreshness, Sensor,
-    SensorKind, SensorStatus, Snapshot, Unit,
+    CollectOptions, DeviceClass, MonitorCollector, ReadingFreshness, Sensor, SensorKind,
+    SensorStatus, Snapshot, Unit, collect_snapshot,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{self, Write};
 use std::process::ExitCode;
 use std::thread;
@@ -231,12 +231,11 @@ fn records<'a>(snapshot: &'a Snapshot, filters: Filters<'_>) -> Vec<Record<'a>> 
         if filters.class.is_some_and(|class| class != device.class) {
             continue;
         }
-        if let Some(query) = device_query.as_deref() {
-            if !device.id.to_ascii_lowercase().contains(query)
-                && !device.name.to_ascii_lowercase().contains(query)
-            {
-                continue;
-            }
+        if let Some(query) = device_query.as_deref()
+            && !device.id.to_ascii_lowercase().contains(query)
+            && !device.name.to_ascii_lowercase().contains(query)
+        {
+            continue;
         }
         for sensor in &device.sensors {
             let limits_unconfigured = sensor.has_unconfigured_hardware_alarm();

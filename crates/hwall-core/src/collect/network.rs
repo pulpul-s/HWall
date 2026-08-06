@@ -1,8 +1,8 @@
+use super::CollectOptions;
 use super::util::{
     add_bool, add_string, add_u64, basename, canonical, command_exists, list_dirs,
     pci_address_from_path, read_bool01, read_trimmed, read_u64, run_command, symlink_basename,
 };
-use super::CollectOptions;
 use crate::model::{Device, DeviceClass, SnapshotBuilder};
 use std::path::{Path, PathBuf};
 

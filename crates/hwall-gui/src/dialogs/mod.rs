@@ -3,21 +3,21 @@ use crate::table::SensorTable;
 use crate::ui::{attach_labeled, copy_text, restore_scroll_position, set_label_text};
 use gtk::prelude::*;
 use gtk::{
-    glib, Align, ApplicationWindow, CheckButton, ComboBoxText, Dialog, Grid, Label, ListBox,
-    ListBoxRow, ResponseType, Window,
+    Align, ApplicationWindow, CheckButton, ComboBoxText, Dialog, Grid, Label, ListBox, ListBoxRow,
+    ResponseType, Window, glib,
 };
 use hwall_app::{
-    alert_supported_sensor, present_sensor, rule_summary, storage_health_availability_text,
     AlertRule, AlertState, AppSettings, Density, LogFormat, LogScope, RowKind, SensorOrderEntry,
-    SensorRow, ThemePreference,
+    SensorRow, ThemePreference, alert_supported_sensor, present_sensor, rule_summary,
+    storage_health_availability_text,
 };
 use hwall_core::render::{
     format_property_value, format_sample_age, format_value, humanize_key, sensor_kind_name,
     storage_health_property_label,
 };
 use hwall_core::{
-    is_storage_health_property, Device, DeviceClass, Identification, RunningStatistics, Sensor,
-    StorageHealthAvailability, STORAGE_HEALTH_PROPERTY_KEYS,
+    Device, DeviceClass, Identification, RunningStatistics, STORAGE_HEALTH_PROPERTY_KEYS, Sensor,
+    StorageHealthAvailability, is_storage_health_property,
 };
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -30,7 +30,7 @@ mod sensor;
 
 pub(super) use device::show_device_details;
 pub(super) use preferences::{show_hidden_items, show_row_alias, show_sensor_order, show_settings};
-pub(super) use sensor::{show_sensor_details, SensorDetailsRequest};
+pub(super) use sensor::{SensorDetailsRequest, show_sensor_details};
 
 fn details_window(parent: &ApplicationWindow, title: &str, width: i32, height: i32) -> Window {
     let window = Window::builder()

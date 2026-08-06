@@ -1,4 +1,4 @@
-use crate::{present_sensor, sensor_key, AlertRule, AlertState, VisibilityState};
+use crate::{AlertRule, AlertState, VisibilityState, present_sensor, sensor_key};
 use hwall_core::render::sensor_kind_name;
 use hwall_core::{Device, DeviceClass, Sensor, SensorKind, Snapshot, SnapshotStatistics};
 use serde::{Deserialize, Serialize};
@@ -666,10 +666,11 @@ mod tests {
             },
         );
         assert!(!rows.iter().any(|row| row.kind == RowKind::Header));
-        assert!(rows
-            .iter()
-            .filter(|row| row.kind == RowKind::Sensor)
-            .all(|row| row.depth == 1));
+        assert!(
+            rows.iter()
+                .filter(|row| row.kind == RowKind::Sensor)
+                .all(|row| row.depth == 1)
+        );
     }
 
     #[test]
@@ -734,9 +735,11 @@ mod tests {
         assert_eq!(json["original_label"].as_str(), Some("Processor"));
 
         for query in ["main processor", "processor"] {
-            assert!(build(query)
-                .iter()
-                .any(|row| row.kind == RowKind::Sensor && row.device_id == "cpu:0"));
+            assert!(
+                build(query)
+                    .iter()
+                    .any(|row| row.kind == RowKind::Sensor && row.device_id == "cpu:0")
+            );
         }
     }
 
@@ -823,9 +826,10 @@ mod tests {
                 alert_states: &BTreeMap::new(),
             },
         );
-        assert!(rows
-            .iter()
-            .any(|row| row.kind == RowKind::Sensor && row.id.contains("temp:0")));
+        assert!(
+            rows.iter()
+                .any(|row| row.kind == RowKind::Sensor && row.id.contains("temp:0"))
+        );
     }
 
     #[test]
@@ -901,9 +905,10 @@ mod tests {
             },
         );
         assert!(rows.iter().any(|row| row.kind == RowKind::Header));
-        assert!(rows
-            .iter()
-            .filter(|row| row.kind == RowKind::Sensor)
-            .all(|row| row.depth == 2));
+        assert!(
+            rows.iter()
+                .filter(|row| row.kind == RowKind::Sensor)
+                .all(|row| row.depth == 2)
+        );
     }
 }

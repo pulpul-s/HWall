@@ -1,4 +1,4 @@
-use crate::{project_dirs, SensorRow};
+use crate::{SensorRow, project_dirs};
 use hwall_core::render::escape_delimited;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};

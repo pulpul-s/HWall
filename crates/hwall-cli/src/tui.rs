@@ -4,8 +4,8 @@ mod header;
 use app::App;
 use hwall_app::TerminalView;
 use hwall_core::MonitorCollector;
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use std::io;
 use std::time::Duration;
 

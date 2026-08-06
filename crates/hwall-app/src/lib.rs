@@ -23,30 +23,30 @@ mod terminal;
 mod visibility;
 
 pub use alerts::{
-    alert_direction, alert_supported_sensor, rule_summary, sensor_key, unit_suffix,
-    valid_alert_color, AlertDirection, AlertEngine, AlertEvent, AlertRule, AlertSeverity,
-    AlertState, DEFAULT_CRITICAL_COLOR, DEFAULT_WARNING_COLOR,
+    AlertDirection, AlertEngine, AlertEvent, AlertRule, AlertSeverity, AlertState,
+    DEFAULT_CRITICAL_COLOR, DEFAULT_WARNING_COLOR, alert_direction, alert_supported_sensor,
+    rule_summary, sensor_key, unit_suffix, valid_alert_color,
 };
 pub use hardware::{
-    build_hardware_inventory, hardware_device_text, hardware_inventory_text,
-    storage_health_availability_text, HardwareCategory, HardwareCategoryKind, HardwareDevice,
-    HardwareInventory, HardwareProperty, HardwareSection, HardwareSensor,
+    HardwareCategory, HardwareCategoryKind, HardwareDevice, HardwareInventory, HardwareProperty,
+    HardwareSection, HardwareSensor, build_hardware_inventory, hardware_device_text,
+    hardware_inventory_text, storage_health_availability_text,
 };
 pub use logging::{
-    default_log_directory, timestamped_log_path, LogFileWriter, LogFormat, LogScope, LogWorker,
+    LogFileWriter, LogFormat, LogScope, LogWorker, default_log_directory, timestamped_log_path,
 };
 pub use plasma::{
-    plasma_window_placement_supported, sync_plasma_window_placement, MAIN_WINDOW_TITLE,
+    MAIN_WINDOW_TITLE, plasma_window_placement_supported, sync_plasma_window_placement,
 };
-pub use presentation::{present_sensor, SensorPresentation};
+pub use presentation::{SensorPresentation, present_sensor};
 pub use rows::{
-    build_sensor_rows, build_sensor_rows_with_order, ordered_device_entries, sensor_order_entries,
-    RowKind, RowOptions, SensorOrderEntry, SensorRow,
+    RowKind, RowOptions, SensorOrderEntry, SensorRow, build_sensor_rows,
+    build_sensor_rows_with_order, ordered_device_entries, sensor_order_entries,
 };
 pub use settings::{
-    AppSettings, ColumnSettings, Density, SettingsStore, ThemePreference,
-    DEFAULT_HISTORY_RETENTION_SECONDS, MAX_HISTORY_RETENTION_SECONDS,
-    MIN_HISTORY_RETENTION_SECONDS, MIN_REFRESH_INTERVAL_MS,
+    AppSettings, ColumnSettings, DEFAULT_HISTORY_RETENTION_SECONDS, Density,
+    MAX_HISTORY_RETENTION_SECONDS, MIN_HISTORY_RETENTION_SECONDS, MIN_REFRESH_INTERVAL_MS,
+    SettingsStore, ThemePreference,
 };
-pub use terminal::{render_terminal_view, TerminalView};
+pub use terminal::{TerminalView, render_terminal_view};
 pub use visibility::VisibilityState;

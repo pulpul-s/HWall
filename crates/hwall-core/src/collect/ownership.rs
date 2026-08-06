@@ -194,12 +194,12 @@ pub(super) fn configure_hwmon_device(
     insert_static_property(device, "memory_type", profile.memory_type);
     insert_static_property(device, "memory_owner_name", profile.memory_owner_name);
 
-    if profile.owner == PhysicalOwner::Memory {
-        if let Some(locator) = locator_from_sysfs(device_path) {
-            device
-                .properties
-                .insert("locator".to_owned(), locator.into());
-        }
+    if profile.owner == PhysicalOwner::Memory
+        && let Some(locator) = locator_from_sysfs(device_path)
+    {
+        device
+            .properties
+            .insert("locator".to_owned(), locator.into());
     }
 
     if profile.identity == IdentityStrategy::MemoryI2cClient {
@@ -219,10 +219,10 @@ pub(super) fn hwmon_display_name(
         );
     };
 
-    if profile.owner == PhysicalOwner::Memory {
-        if let Some(locator) = locator_from_sysfs(device_path) {
-            return format!("{} — {locator}", profile.family_name());
-        }
+    if profile.owner == PhysicalOwner::Memory
+        && let Some(locator) = locator_from_sysfs(device_path)
+    {
+        return format!("{} — {locator}", profile.family_name());
     }
 
     profile.display_name.to_owned()
@@ -318,10 +318,10 @@ impl DriverProfile {
         match self.identity {
             IdentityStrategy::CpuPackage => Some("cpu:0".to_owned()),
             IdentityStrategy::MemoryI2cClient => {
-                if let Some(locator) = locator_from_sysfs(path) {
-                    if let Some(id) = slot_device_id(&locator) {
-                        return Some(id);
-                    }
+                if let Some(locator) = locator_from_sysfs(path)
+                    && let Some(id) = slot_device_id(&locator)
+                {
+                    return Some(id);
                 }
                 i2c_client_from_path(path)
                     .map(|client| format!("memory:{}:{client}", self.canonical_name))

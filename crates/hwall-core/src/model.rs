@@ -646,13 +646,12 @@ impl Snapshot {
 
                     let mut sensors = sensors_by_id(std::mem::take(&mut existing.sensors));
                     for mut sensor in incoming.sensors {
-                        if let Some(previous) = sensors.get(&sensor.id) {
-                            if sensor.identification == Identification::Unidentified
-                                && previous.identification != Identification::Unidentified
-                            {
-                                sensor.label = previous.label.clone();
-                                sensor.identification = previous.identification;
-                            }
+                        if let Some(previous) = sensors.get(&sensor.id)
+                            && sensor.identification == Identification::Unidentified
+                            && previous.identification != Identification::Unidentified
+                        {
+                            sensor.label = previous.label.clone();
+                            sensor.identification = previous.identification;
                         }
                         sensors.insert(sensor.id.clone(), sensor);
                     }

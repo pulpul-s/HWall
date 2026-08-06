@@ -1,15 +1,15 @@
 use super::header::{self, ActivityState, HeaderData};
-use hwall_app::{render_terminal_view, TerminalView};
+use hwall_app::{TerminalView, render_terminal_view};
 use hwall_core::{
-    render, MonitorCollector, MonitorPoll, MonitorRequestResult, MonitorWorker, Snapshot,
-    SnapshotStatistics,
+    MonitorCollector, MonitorPoll, MonitorRequestResult, MonitorWorker, Snapshot,
+    SnapshotStatistics, render,
 };
+use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 use std::cmp;
 use std::io;
 use std::time::{Duration, Instant};

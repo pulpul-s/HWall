@@ -1,6 +1,6 @@
 use crate::{
-    build_hardware_inventory, build_sensor_rows, HardwareDevice, HardwareInventory, HardwareSensor,
-    RowKind, RowOptions, SensorRow, VisibilityState,
+    HardwareDevice, HardwareInventory, HardwareSensor, RowKind, RowOptions, SensorRow,
+    VisibilityState, build_hardware_inventory, build_sensor_rows,
 };
 use hwall_core::{Snapshot, SnapshotStatistics};
 use std::collections::BTreeMap;

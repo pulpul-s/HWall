@@ -1,4 +1,4 @@
-use crate::{parse_duration, sensors, ViewArg};
+use crate::{ViewArg, parse_duration, sensors};
 use clap::Args;
 use hwall_core::{CollectOptions, MonitorCollector, Snapshot};
 use std::io::{self, Read, Write};

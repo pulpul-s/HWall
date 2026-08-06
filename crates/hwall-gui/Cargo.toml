@@ -15,7 +15,7 @@ tray = ["dep:ksni"]
 [dependencies]
 hwall-core = { path = "../hwall-core" }
 hwall-app = { path = "../hwall-app" }
-gtk = { package = "gtk4", version = "=0.11.4", features = ["v4_8"] }
+gtk = { package = "gtk4", version = "0.11.4", features = ["v4_8"] }
 # The blocking API is only a wrapper; zbus still requires one concrete I/O backend.
 # async-io keeps tray integration self-contained without introducing a Tokio runtime.
-ksni = { version = "=0.3.6", default-features = false, features = ["blocking", "async-io"], optional = true }
+ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"], optional = true }

@@ -1,6 +1,6 @@
 use crate::{
-    is_storage_health_property, Identification, PropertyValue, ReadingFreshness, Sensor,
-    SensorKind, SensorStatus, Unit,
+    Identification, PropertyValue, ReadingFreshness, Sensor, SensorKind, SensorStatus, Unit,
+    is_storage_health_property,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -60,10 +60,8 @@ pub fn sync_plasma_window_placement(
         }
     } else if kconfig_tools_available() {
         changed |= remove_rule()?;
-        if changed {
-            if let Some(tools) = tools {
-                tools.reconfigure()?;
-            }
+        if changed && let Some(tools) = tools {
+            tools.reconfigure()?;
         }
     }
 
@@ -269,8 +267,10 @@ mod tests {
         assert!(MANAGED_RULE_ENTRIES.contains(&("title", MAIN_WINDOW_TITLE)));
         assert!(MANAGED_RULE_ENTRIES.contains(&("titlematch", "1")));
         assert!(MANAGED_RULE_ENTRIES.contains(&("positionrule", "4")));
-        assert!(!MANAGED_RULE_ENTRIES
-            .iter()
-            .any(|(key, _)| *key == "position"));
+        assert!(
+            !MANAGED_RULE_ENTRIES
+                .iter()
+                .any(|(key, _)| *key == "position")
+        );
     }
 }
