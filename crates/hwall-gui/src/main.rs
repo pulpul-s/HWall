@@ -384,6 +384,12 @@ fn connect_actions(model: &SharedModel, ui: &Ui, actions: ToolbarActions) {
         show_sensor_context_menu(&model_for_context, &ui_for_context, row, &anchor, x, y);
     });
 
+    let model_for_collapse = model.clone();
+    let ui_for_collapse = ui.clone();
+    ui.table.set_collapse_handler(move |row| {
+        toggle_row_collapsed(&model_for_collapse, &ui_for_collapse, &row);
+    });
+
     let key_controller = gtk::EventControllerKey::new();
     key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     let model_for_keys = model.clone();

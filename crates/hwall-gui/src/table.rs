@@ -12,10 +12,12 @@ use std::rc::Rc;
 const SENSOR_MARKER_SLOT: &str = "    ";
 
 type ContextHandler = Rc<dyn Fn(SensorRow, gtk::Widget, f64, f64)>;
+type CollapseHandler = Rc<dyn Fn(SensorRow)>;
 
 #[derive(Default)]
 struct TableHandlers {
     context: Option<ContextHandler>,
+    collapse: Option<CollapseHandler>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +263,10 @@ impl SensorTable {
         self.handlers.borrow_mut().context = Some(Rc::new(handler));
     }
 
+    pub(super) fn set_collapse_handler(&self, handler: impl Fn(SensorRow) + 'static) {
+        self.handlers.borrow_mut().collapse = Some(Rc::new(handler));
+    }
+
     pub(super) fn sync_rows(&self, rows: &[SensorRow], preserve_ids: &[String]) -> bool {
         if self.has_same_topology(rows) {
             self.update_rows(rows);
@@ -465,7 +471,7 @@ fn make_column(
         click.set_button(3);
         let weak_item = item.downgrade();
         let selection = selection_for_setup.clone();
-        let handlers = Rc::clone(&handlers);
+        let context_handlers = Rc::clone(&handlers);
         click.connect_pressed(move |gesture, _, x, y| {
             let Some(item) = weak_item.upgrade() else {
                 return;
@@ -488,7 +494,7 @@ fn make_column(
             let Some(widget) = gesture.widget() else {
                 return;
             };
-            if let Some(handler) = handlers.borrow().context.clone() {
+            if let Some(handler) = context_handlers.borrow().context.clone() {
                 handler(row, widget, x, y);
             }
         });
@@ -498,6 +504,36 @@ fn make_column(
         if kind == DataColumn::Sensor {
             let prefix = Label::new(None);
             prefix.set_yalign(0.5);
+            let collapse_click = gtk::GestureClick::new();
+            collapse_click.set_button(1);
+            collapse_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let weak_item = item.downgrade();
+            let collapse_handlers = Rc::clone(&handlers);
+            collapse_click.connect_pressed(move |gesture, _, x, _| {
+                let Some(item) = weak_item.upgrade() else {
+                    return;
+                };
+                let Some(boxed) = item.item().and_downcast::<glib::BoxedAnyObject>() else {
+                    return;
+                };
+                let row = boxed.borrow::<RowState>().row.clone();
+                if !matches!(row.kind, RowKind::Device | RowKind::Header) {
+                    return;
+                }
+                let Some(prefix) = gesture.widget().and_downcast::<Label>() else {
+                    return;
+                };
+                let indent = "  ".repeat(row.depth as usize);
+                let (indent_width, _) = prefix.create_pango_layout(Some(&indent)).pixel_size();
+                if x < f64::from(indent_width) {
+                    return;
+                }
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                if let Some(handler) = collapse_handlers.borrow().collapse.clone() {
+                    handler(row);
+                }
+            });
+            prefix.add_controller(collapse_click);
             let slot_text = Label::new(Some(SENSOR_MARKER_SLOT));
             let marker = Label::new(Some("★"));
             marker.set_visible(false);
