@@ -20,6 +20,7 @@ pub enum HardwareCategoryKind {
     Graphics,
     Storage,
     Network,
+    Bluetooth,
     Pci,
     Usb,
     Thunderbolt,
@@ -32,7 +33,7 @@ pub enum HardwareCategoryKind {
 }
 
 impl HardwareCategoryKind {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::System,
         Self::Motherboard,
         Self::Processor,
@@ -40,6 +41,7 @@ impl HardwareCategoryKind {
         Self::Graphics,
         Self::Storage,
         Self::Network,
+        Self::Bluetooth,
         Self::Pci,
         Self::Usb,
         Self::Thunderbolt,
@@ -60,6 +62,7 @@ impl HardwareCategoryKind {
             Self::Graphics => "Graphics",
             Self::Storage => "Storage",
             Self::Network => "Network",
+            Self::Bluetooth => "Bluetooth",
             Self::Pci => "PCI",
             Self::Usb => "USB",
             Self::Thunderbolt => "Thunderbolt",
@@ -709,6 +712,10 @@ fn bus_address_label(device: &Device) -> &'static str {
 }
 
 fn category_for(device: &Device) -> HardwareCategoryKind {
+    if device.class == DeviceClass::Bluetooth {
+        return HardwareCategoryKind::Bluetooth;
+    }
+
     let searchable = format!(
         "{} {} {} {}",
         device.name,
@@ -748,6 +755,7 @@ fn category_for(device: &Device) -> HardwareCategoryKind {
         DeviceClass::Gpu => HardwareCategoryKind::Graphics,
         DeviceClass::Storage => HardwareCategoryKind::Storage,
         DeviceClass::Network => HardwareCategoryKind::Network,
+        DeviceClass::Bluetooth => HardwareCategoryKind::Bluetooth,
         DeviceClass::Pci => HardwareCategoryKind::Pci,
         DeviceClass::Usb => HardwareCategoryKind::Usb,
         DeviceClass::Thunderbolt => HardwareCategoryKind::Thunderbolt,
@@ -762,6 +770,17 @@ fn category_for(device: &Device) -> HardwareCategoryKind {
 }
 
 fn device_subtitle(device: &Device) -> String {
+    if device.class == DeviceClass::Bluetooth {
+        let device_type = device.property_str("device_type");
+        let battery = device.property_str("battery");
+        return match (device_type, battery) {
+            (Some(device_type), Some(battery)) => format!("{device_type} · {battery}"),
+            (Some(device_type), None) => device_type.to_owned(),
+            (None, Some(battery)) => format!("{battery} battery"),
+            (None, None) => device.class.display_name().to_owned(),
+        };
+    }
+
     if device.class == DeviceClass::Network {
         let values = [device.driver.as_deref(), device.bus_address.as_deref()]
             .into_iter()
@@ -1335,9 +1354,44 @@ mod tests {
         assert_eq!(device_subtitle(&usb), "1-11");
         assert_eq!(device_subtitle(&motherboard), "Motherboard");
         assert_eq!(device_subtitle(&storage), "Example vendor");
+        let mut bluetooth = Device::new(
+            "bluetooth:mx-master-3s",
+            DeviceClass::Bluetooth,
+            "MX Master 3S",
+        );
+        bluetooth
+            .properties
+            .insert("device_type".to_owned(), "Mouse".into());
+        bluetooth
+            .properties
+            .insert("battery".to_owned(), "85%".into());
+
         assert_eq!(device_subtitle(&network), "igc · eno1");
+        assert_eq!(device_subtitle(&bluetooth), "Mouse · 85%");
         assert_eq!(bus_address_label(&storage), "Bus address");
         assert_eq!(bus_address_label(&network), "Interface");
+    }
+
+    #[test]
+    fn projects_bluetooth_devices_into_the_bluetooth_category() {
+        let mut snapshot = Snapshot::new();
+        snapshot.devices.push(Device::new(
+            "bluetooth:mx-master-3s",
+            DeviceClass::Bluetooth,
+            "MX Master 3S",
+        ));
+        let inventory = build_hardware_inventory(
+            &snapshot,
+            &SnapshotStatistics::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(inventory.categories.len(), 1);
+        assert_eq!(inventory.categories[0].kind, HardwareCategoryKind::Bluetooth);
+        assert_eq!(inventory.categories[0].label, "Bluetooth");
     }
 
     #[test]

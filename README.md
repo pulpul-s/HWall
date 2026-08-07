@@ -25,7 +25,7 @@ Most of the project was written with the help of AI. If you are not comfortable 
 - Clear stale, unavailable, and offline states when a live reading can no longer be refreshed
 - Configurable bounded in-memory sensor history with interactive charts, hover inspection, zooming, panning, selectable time ranges, timestamp inspection, and Save As export to CSV or JSON Lines
 - Per-sensor warning and critical alerts with duration, hysteresis, cooldown, and desktop notifications
-- Hardware inventory for processors, memory, graphics, storage, network, USB, PCI, batteries, firmware, and supported security devices
+- Hardware inventory for processors, memory, graphics, storage, network, Bluetooth, USB, PCI, batteries, firmware, and supported security devices
 - Optional SMART and NVMe health information
 - Human-readable reports, filtered sensor output, JSON export, JSON Lines streaming, and an interactive terminal monitor
 - HTTP JSON API: Serve the latest sensor, mixed, or hardware snapshot over HTTP with a configurable address and refresh interval
@@ -77,7 +77,8 @@ HWall can operate from Linux kernel interfaces alone, but installing the applica
 | Helper | Purpose |
 |---|---|
 | `lm-sensors` | **Strongly recommended.** Supplies configured sensor labels, motherboard-specific scaling, and improved interpretation of hwmon channels. HWall still reads ordinary hwmon sensors directly from sysfs. |
-| `hwdata` | Provides readable PCI vendor and device names through the local `pci.ids` database. |
+| `hwdata` | Provides readable PCI and USB vendor/device names through local ID databases where available. |
+| BlueZ (`bluetoothctl`) | Adds currently connected Bluetooth devices, including device type and battery level when BlueZ reports them. |
 | `ethtool` | Adds network driver and firmware information. |
 | `smartmontools` | Required for detailed SMART health and lifetime information on supported SATA, SAS, and related drives. |
 | `nvme-cli` | Required for detailed NVMe health warnings and lifetime counters. |

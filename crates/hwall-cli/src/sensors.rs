@@ -192,7 +192,7 @@ pub(crate) fn run(args: Args, options: CollectOptions) -> ExitCode {
     } else {
         let mut collector = MonitorCollector::new(
             options,
-            Duration::from_secs(30),
+            Duration::from_secs(90),
             Duration::from_secs(30 * 60),
         );
         thread::sleep(args.sample);

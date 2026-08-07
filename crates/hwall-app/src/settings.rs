@@ -142,7 +142,7 @@ impl Default for AppSettings {
             window_height: 720,
             maximized: false,
             interval_ms: 1_000,
-            rediscover_seconds: 30,
+            rediscover_seconds: 90,
             health_interval_seconds: 1_800,
             density: Density::Compact,
             theme: ThemePreference::System,

@@ -69,7 +69,7 @@ struct WatchArgs {
     interval: Duration,
 
     /// Re-run full discovery at this interval for hotplug and label changes.
-    #[arg(long, default_value = "30s", value_parser = parse_duration)]
+    #[arg(long, default_value = "90s", value_parser = parse_duration)]
     rediscover: Duration,
 
     /// Refresh SMART/NVMe health at this interval when --health is enabled.
@@ -93,7 +93,7 @@ impl Default for WatchArgs {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(1),
-            rediscover: Duration::from_secs(30),
+            rediscover: Duration::from_secs(90),
             health_interval: Duration::from_secs(30 * 60),
             view: ViewArg::Mixed,
             jsonl: false,

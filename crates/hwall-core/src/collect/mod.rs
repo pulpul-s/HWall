@@ -1,4 +1,5 @@
 mod block;
+mod bluetooth;
 mod cpu;
 mod dmi;
 pub(crate) mod effective_clock;
@@ -102,6 +103,9 @@ fn collect_full(builder: &mut SnapshotBuilder, options: &CollectOptions) {
     builder.mark_collector_succeeded(CollectorId::Cpu);
     pci::collect(builder);
     usb::collect(builder, options.include_sensitive);
+    if options.allow_helper_commands {
+        bluetooth::collect(builder, options.include_sensitive);
+    }
     block::collect(builder, options.include_sensitive);
     builder.mark_collector_succeeded(CollectorId::Block);
     nvme::collect(builder, options.include_sensitive);

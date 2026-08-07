@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const REDISCOVER_INTERVAL: Duration = Duration::from_secs(30);
+const REDISCOVER_INTERVAL: Duration = Duration::from_secs(90);
 const HEALTH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REQUEST_LINE_BYTES: usize = 4096;
