@@ -6,7 +6,7 @@ HWall is a read-only Linux hardware monitor and inventory application written in
 
 I originally started this project for myself because I was tired of the lack of HWiNFO64 style sensor monitoring software for Linux, something that could show me everything I wanted to see in a simple table view, just like in Windows. It began as a personal tool, but once it became good enough in my opinion, I decided to release it for everyone, since I'm not probably the only one missing HWiNFO64 from Windows.
 
-Most of the project was written with the help of AI. If you are not comfortable using AI-assisted software, you are under no obligation to use it. If you would still like to try the software but are concerned if the provided binaries are legitimate, you are welcome to review the source code and build it yourself.
+Most of the project was written with the help of AI. If you are not comfortable using AI-assisted software, you are under no obligation to use it. After version 1.0.4 binary packages are built using a GitHub CI/CD pipeline you can review or you can review the complete source and build it yourself.
 
 ## Screenshots
 
@@ -144,13 +144,6 @@ Build only the command-line application without GTK dependencies:
 
 ```bash
 make release-cli
-```
-
-After staging intended source changes, regenerate the tracked-file checksums and run the full validation suite:
-
-```bash
-make checksums
-make verify
 ```
 
 ## Installing

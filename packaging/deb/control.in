@@ -1,0 +1,11 @@
+Package: hwall
+Version: @VERSION@-1+@SUITE@
+Architecture: @ARCH@
+Maintainer: pulpul-s <pulpul-s@users.noreply.github.com>
+Section: utils
+Priority: optional
+Depends: libc6, libgcc-s1, libgtk-4-1 (>= 4.8)
+Recommends: lm-sensors, hwdata, ethtool, smartmontools, nvme-cli, dmidecode, pkexec
+Description: Linux hardware inventory and live sensor monitor
+ HWall provides GTK 4 and terminal interfaces for hardware inventory,
+ live sensors, alerts, history, and storage health information.

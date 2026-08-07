@@ -1,0 +1,33 @@
+pkgname=hwall
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Linux hardware inventory and live sensor monitor'
+arch=('x86_64')
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'gtk4>=4.8')
+optdepends=(
+  'lm_sensors: configured sensor labels and improved hwmon interpretation'
+  'hwdata: readable PCI vendor and device names'
+  'ethtool: network driver and firmware information'
+  'smartmontools: SMART health and lifetime data for supported drives'
+  'nvme-cli: detailed NVMe health warnings and lifetime counters'
+  'dmidecode: motherboard, firmware, CPU socket, and memory module inventory'
+  'polkit: privileged SMART and NVMe retries through pkexec'
+)
+makedepends=('pkgconf' 'rust>=1.92')
+options=('!debug')
+source=()
+sha256sums=()
+
+_source_root='@SOURCE_ROOT@'
+
+build() {
+  cd "$_source_root"
+  CARGO_TARGET_DIR="$srcdir/target" make release
+}
+
+package() {
+  cd "$_source_root"
+  CARGO_TARGET_DIR="$srcdir/target" make DESTDIR="$pkgdir" PREFIX=/usr install
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

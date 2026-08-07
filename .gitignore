@@ -1,5 +1,4 @@
 .cargo
-.github
 /dist/
 /target/
 *.swp

@@ -1,0 +1,243 @@
+name: Release packages
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      number: ${{ steps.version.outputs.number }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - id: version
+        name: Validate release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)
+          case "$RELEASE_TAG" in
+            "$version"|"v$version") ;;
+            *)
+              echo "Release tag $RELEASE_TAG does not match Cargo version $version" >&2
+              exit 1
+              ;;
+          esac
+          echo "number=$version" >> "$GITHUB_OUTPUT"
+
+  deb:
+    needs: version
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: deb12
+            image: debian:12-slim
+          - suite: deb13
+            image: debian:13-slim
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            build-essential ca-certificates curl git libgtk-4-dev pkg-config
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain none
+          . "$HOME/.cargo/env"
+          rustup toolchain install \
+            "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -n1)" \
+            --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build package
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.number }}
+          SUITE: ${{ matrix.suite }}
+        run: |
+          package_root="$RUNNER_TEMP/hwall-package"
+          architecture=$(dpkg --print-architecture)
+
+          make DESTDIR="$package_root" PREFIX=/usr install
+          install -Dm644 LICENSE "$package_root/usr/share/doc/hwall/copyright"
+          mkdir -p "$package_root/DEBIAN" dist
+          sed \
+            -e "s/@VERSION@/$VERSION/g" \
+            -e "s/@SUITE@/$SUITE/g" \
+            -e "s/@ARCH@/$architecture/g" \
+            packaging/deb/control.in > "$package_root/DEBIAN/control"
+          dpkg-deb --root-owner-group --build \
+            "$package_root" \
+            "dist/hwall_${VERSION}-1+${SUITE}_${architecture}.deb"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ matrix.suite }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  rpm:
+    needs: version
+    runs-on: ubuntu-24.04
+    container:
+      image: registry.fedoraproject.org/fedora:44
+
+    steps:
+      - name: Install RPM build tools
+        run: dnf install --assumeyes dnf5-plugins git rpm-build
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build package
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.number }}
+        run: |
+          dnf builddep --assumeyes \
+            -D "hwall_version $VERSION" \
+            packaging/rpm/hwall.spec
+
+          topdir="$RUNNER_TEMP/rpmbuild"
+          mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} dist
+          rpmbuild -bb --build-in-place \
+            --define "_topdir $topdir" \
+            --define "hwall_version $VERSION" \
+            packaging/rpm/hwall.spec
+          find "$topdir/RPMS" -type f -name 'hwall-*.rpm' -exec cp {} dist/ \;
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-rpm
+          path: dist/*.rpm
+          if-no-files-found: error
+
+  arch:
+    needs: version
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux/archlinux:base-devel
+
+    steps:
+      - name: Install Git
+        run: pacman -Syu --noconfirm --needed git
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build package
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.number }}
+        run: |
+          mkdir -p package dist
+          sed \
+            -e "s|@VERSION@|$VERSION|g" \
+            -e "s|@SOURCE_ROOT@|$GITHUB_WORKSPACE|g" \
+            packaging/arch/PKGBUILD.in > package/PKGBUILD
+
+          useradd --create-home builder
+          printf 'builder ALL=(ALL) NOPASSWD: /usr/bin/pacman\n' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          chown -R builder:builder package
+          sudo -H -u builder bash -c 'cd "$1" && makepkg --syncdeps --cleanbuild --noconfirm' _ "$GITHUB_WORKSPACE/package"
+          cp package/*.pkg.tar.zst dist/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-arch
+          path: dist/*.pkg.tar.zst
+          if-no-files-found: error
+
+  appimage:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:12-slim
+
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            adwaita-icon-theme bison build-essential ca-certificates curl file flex \
+            gettext git gperf libdrm-dev libgdk-pixbuf2.0-bin libgtk-4-dev librsvg2-common \
+            meson ninja-build patchelf pkg-config python3 python3-pip sassc
+          python3 -m pip install --no-cache-dir --break-system-packages meson==1.11.2
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain none
+          . "$HOME/.cargo/env"
+          rustup toolchain install \
+            "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -n1)" \
+            --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build AppImage
+        shell: bash
+        env:
+          HWALL_VERSION: ${{ needs.version.outputs.number }}
+        run: packaging/appimage/build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-appimage
+          path: dist/appimage/*.AppImage
+          if-no-files-found: error
+
+  publish:
+    needs: [deb, rpm, arch, appimage]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload \
+            "$RELEASE_TAG" \
+            dist/* \
+            --repo "$GITHUB_REPOSITORY"
