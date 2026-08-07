@@ -139,7 +139,10 @@ mod tests {
         let ids = UsbIds::parse(
             "# Vendors, devices and classes\n8087  Intel Corp.\n\t0032  AX210 Bluetooth\nC 00  (Defined at Interface level)\n",
         );
-        assert_eq!(ids.vendors.get(&0x8087).map(String::as_str), Some("Intel Corp."));
+        assert_eq!(
+            ids.vendors.get(&0x8087).map(String::as_str),
+            Some("Intel Corp.")
+        );
         assert_eq!(
             ids.products.get(&(0x8087, 0x0032)).map(String::as_str),
             Some("AX210 Bluetooth")

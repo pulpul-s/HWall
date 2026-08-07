@@ -1390,7 +1390,10 @@ mod tests {
         );
 
         assert_eq!(inventory.categories.len(), 1);
-        assert_eq!(inventory.categories[0].kind, HardwareCategoryKind::Bluetooth);
+        assert_eq!(
+            inventory.categories[0].kind,
+            HardwareCategoryKind::Bluetooth
+        );
         assert_eq!(inventory.categories[0].label, "Bluetooth");
     }
 
