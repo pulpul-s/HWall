@@ -24,10 +24,14 @@ $(DEBUG_GUI) $(DEBUG_CLI) &: $(WORKSPACE_INPUTS)
 
 build: $(DEBUG_GUI) $(DEBUG_CLI)
 
-$(RELEASE_GUI) $(RELEASE_CLI) &: $(WORKSPACE_INPUTS)
-	cargo build --locked --workspace --release
+$(RELEASE_GUI): $(WORKSPACE_INPUTS)
+	cargo build --locked --release -p hwall-gui
 
-release: $(RELEASE_GUI) $(RELEASE_CLI)
+$(RELEASE_CLI): $(WORKSPACE_INPUTS)
+	cargo build --locked --release -p hwall-cli
+
+release:
+	cargo build --locked --workspace --release
 
 release-gui: $(RELEASE_GUI)
 
