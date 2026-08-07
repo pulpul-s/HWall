@@ -74,13 +74,13 @@ pub(super) fn collect(builder: &mut SnapshotBuilder, include_sensitive: bool) {
 }
 
 #[derive(Default)]
-struct UsbIds {
+pub(super) struct UsbIds {
     vendors: HashMap<u16, String>,
     products: HashMap<(u16, u16), String>,
 }
 
 impl UsbIds {
-    fn load() -> Self {
+    pub(super) fn load() -> Self {
         let candidates = [
             "/usr/share/hwdata/usb.ids",
             "/usr/share/misc/usb.ids",
@@ -94,6 +94,10 @@ impl UsbIds {
             return Self::default();
         };
         Self::parse(&content)
+    }
+
+    pub(super) fn vendor_name(&self, vendor_id: u16) -> Option<&str> {
+        self.vendors.get(&vendor_id).map(String::as_str)
     }
 
     fn parse(content: &str) -> Self {
